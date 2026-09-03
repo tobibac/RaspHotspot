@@ -132,6 +132,25 @@ else
     out_attr=""
 fi
 
+# --- Latenzeinstellungen -----------------------------------------------------
+# SonoBus speichert seine Parameter als ValueTree unter "filterStateXML".
+# Wir geben die drei latenzrelevanten Werte vor:
+#   defsendqual = Sendeformat (PCM = kein Codec = keine Encoder-Verzögerung)
+#   defnetbuf   = Start-Jitterpuffer in SEKUNDEN
+#   defnetauto  = Regelverhalten des Jitterpuffers
+if ! send_qual="$(send_format_index "${SB_SEND_FORMAT:-pcm16}")"; then
+    warn "Unbekanntes SB_SEND_FORMAT '${SB_SEND_FORMAT}' – nehme pcm16."
+    SB_SEND_FORMAT="pcm16"
+fi
+
+if ! jitter_mode="$(jitter_mode_index "${SB_JITTER_MODE:-auto-full}")"; then
+    warn "Unbekannter SB_JITTER_MODE '${SB_JITTER_MODE}' – nehme auto-full."
+    SB_JITTER_MODE="auto-full"
+fi
+
+# Millisekunden -> Sekunden, ohne bc auszukommen
+jitter_s="$(awk -v ms="${SB_JITTER_MS:-5}" 'BEGIN { printf "%.4f", ms / 1000 }')"
+
 cat > "${SB_SETTINGS}.tmp" <<XML
 <?xml version="1.0" encoding="UTF-8"?>
 
@@ -141,9 +160,18 @@ cat > "${SB_SETTINGS}.tmp" <<XML
                  audioOutputDeviceName="$(xml_escape "$out_dev")"
                  audioInputDeviceName="RaspHotspot Input"
                  audioDeviceRate="${SB_SAMPLE_RATE:-48000}"
-                 audioDeviceBufferSize="${SB_BUFFER_SIZE:-256}"
+                 audioDeviceBufferSize="${SB_BUFFER_SIZE:-128}"
                  audioDeviceInChans="${in_chans}"
                  ${out_attr}/>
+  </VALUE>
+  <VALUE name="filterStateXML">
+    <SonoBusAoO>
+      <PARAM id="defsendqual" value="${send_qual}"/>
+      <PARAM id="defnetbuf" value="${jitter_s}"/>
+      <PARAM id="defnetauto" value="${jitter_mode}"/>
+      <PARAM id="mastsendmute" value="0"/>
+      <PARAM id="mastinmute" value="0"/>
+    </SonoBusAoO>
   </VALUE>
   <VALUE name="shouldOverrideSampleRate" val="1"/>
   <VALUE name="shouldMuteInput" val="0"/>
@@ -163,6 +191,8 @@ say "geschrieben: ${SB_SETTINGS}"
 say "  Eingang : Kanal ${SB_INPUT_FIRST_CHANNEL}-$(( SB_INPUT_FIRST_CHANNEL + SB_INPUT_CHANNELS - 1 )) (Maske ${in_chans})"
 say "  Ausgang : ${out_dev:-aus}"
 say "  Rate    : ${SB_SAMPLE_RATE} Hz, Puffer ${SB_BUFFER_SIZE} Samples"
+say "  Format  : ${SB_SEND_FORMAT} (Index ${send_qual}), Jitterpuffer ${SB_JITTER_MS} ms / ${SB_JITTER_MODE}"
+say "  Latenz  : $(awk -v b="${SB_BUFFER_SIZE:-128}" -v r="${SB_SAMPLE_RATE:-48000}" 'BEGIN { printf "%.1f", 1000 * b / r }') ms Audiopuffer pro Richtung"
 
 # Für rasphotspot-status merken, was erkannt wurde.
 install -d -m 755 "$STATE_DIR"

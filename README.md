@@ -7,15 +7,17 @@ Macht aus einem Raspberry Pi eine autarke Audio-Basisstation:
    `aoo.sonobus.net`, nur lokal. Dadurch funktioniert alles **ohne Internet**.
 3. **SonoBus läuft headless** auf dem Pi, nimmt das Audio des per USB
    angeschlossenen **Sound Devices MixPre-10T** entgegen und sendet es in die
-   Gruppe **`ArizonaArizona`**.
+   Gruppe **`ArizonaArizona`** – auf kürzeste Latenz getrimmt.
+4. Wer sich ins WLAN einbucht, bekommt **automatisch eine Anleitungsseite** aufs
+   Display (wie im Hotel-WLAN) mit App-Links und den Verbindungsdaten.
 
-Alle im WLAN eingebuchten Geräte starten einfach SonoBus, tragen den Pi als
-Verbindungsserver ein, betreten die Gruppe – und hören den MixPre.
+Alles startet von selbst, sobald der Pi Strom bekommt.
 
 ```
    MixPre-10T ──USB──> Raspberry Pi ──WLAN (offen)──> Handys / Laptops
-                        ├── aooserver        (Gruppenserver, Port 10998)
-                        └── sonobus --headless (Sender in Gruppe "ArizonaArizona")
+                        ├── aooserver          (Gruppenserver, Port 10998)
+                        ├── sonobus --headless (Sender in Gruppe "ArizonaArizona")
+                        └── Begrüßungsseite    (Anleitung auf http://10.42.0.1)
 ```
 
 ---
@@ -50,10 +52,11 @@ Das Skript erledigt der Reihe nach:
 1. Pakete installieren (Compiler, ALSA, X11-Bibliotheken, ggf. hostapd/dnsmasq)
 2. Dienstbenutzer `sonobus` und Verzeichnisse anlegen
 3. Konfiguration nach `/etc/rasphotspot/rasphotspot.conf` schreiben
-4. Hilfsskripte nach `/usr/local/bin` installieren
+4. Hilfsskripte und Begrüßungsseite nach `/usr/local` installieren
 5. `aooserver` und `sonobus` aus den Quellen bauen ← **das dauert**
-6. systemd-Dienste `aooserver.service` und `sonobus-sender.service` einrichten
-7. Den offenen Hotspot einrichten
+6. systemd-Dienste einrichten und für den Autostart aktivieren
+   (`aooserver`, `sonobus-sender`, `rasphotspot-portal`)
+7. Den offenen Hotspot samt Begrüßungsseite einrichten
 8. Alles starten
 
 Danach einmal neu starten:
@@ -105,8 +108,10 @@ und danach `sudo systemctl restart sonobus-sender`.
 ## So verbinden sich die Zuhörer
 
 1. Mit dem offenen WLAN **`ArizonaArizona`** verbinden – kein Passwort.
-2. SonoBus öffnen (kostenlos für iOS, Android, macOS, Windows, Linux von
-   [sonobus.net](https://sonobus.net)).
+   Auf den meisten Geräten **öffnet sich die Anleitungsseite von selbst**
+   (bei iPhones sofort, bei Android als Benachrichtigung „Anmelden"). Sonst im
+   Browser `http://10.42.0.1` aufrufen.
+2. Die Seite führt durch beides: App installieren und verbinden.
 3. Im Verbindungsfenster **nicht** den voreingestellten Server
    `aoo.sonobus.net` lassen, sondern eintragen:
 
@@ -119,12 +124,18 @@ und danach `sudo systemctl restart sonobus-sender`.
 
 4. Gruppe betreten – der Pi ist als **`MixPre-10T`** schon drin.
 
-Alternativ gibt es einen Link, den SonoBus direkt versteht (kopieren, dann in
-SonoBus „Verbindungsinfo einfügen"):
+Schneller geht es über den Link. Die Anleitungsseite hat dafür einen Knopf
+„Verbindungslink kopieren":
 
 ```
 sonobus://10.42.0.1:10998/?g=ArizonaArizona
 ```
+
+SonoBus schaut beim Start in die Zwischenablage: liegt so ein Link dort, füllt
+die App die Gruppendaten selbst aus – man muss nur noch auf *Verbinden* tippen.
+Das ist der zuverlässigste Weg, weil die Android-App das `sonobus://`-Schema
+nicht direkt registriert; auf iPhone, Mac und PC funktioniert auch der direkte
+Klick auf den Link.
 
 Die fertigen Anschlussinfos stehen nach der Installation auch auf dem Pi:
 `/etc/rasphotspot/connect-info.txt`
@@ -138,6 +149,99 @@ Die fertigen Anschlussinfos stehen nach der Installation auch auf dem Pi:
 > DHCP absichtlich **kein** Standard-Gateway und keinen DNS-Server, damit Handys
 > parallel ihre Mobilfunkverbindung behalten. Wer das anders will, setzt
 > `AP_OFFER_GATEWAY="yes"`.
+
+---
+
+---
+
+## Die Begrüßungsseite
+
+Bucht sich ein Gerät ins WLAN ein, prüft es automatisch, ob es Internet hat –
+iPhones fragen `captive.apple.com`, Android `connectivitycheck.gstatic.com`,
+Windows `msftconnecttest.com`. Der dnsmasq des Hotspots beantwortet **alle**
+Namen mit der Adresse des Pi, und der kleine Webserver auf dem Pi liefert statt
+der erwarteten Erfolgsmeldung die Anleitungsseite. Genau daran erkennen die
+Geräte ein „Anmelde-WLAN" und zeigen die Seite von selbst an.
+
+Die Seite erklärt in zwei Schritten:
+
+1. **App installieren** – mit Links zu Play Store, App Store und sonobus.net
+   und dem deutlichen Hinweis, dass man dafür das WLAN kurz verlassen muss
+   (mobile Daten oder anderes WLAN), weil dieser Hotspot kein Internet hat.
+2. **Verbinden** – Knopf „Verbindungslink kopieren", dazu Server, Port und
+   Gruppe zum Abtippen und ein paar Tipps (Kopfhörer, eigenes Mikro stumm).
+
+Anpassen lässt sich das über `PORTAL_TITLE` und `PORTAL_NOTE`
+(z. B. `PORTAL_NOTE="Heute: Soundcheck ab 18 Uhr"`); die Seite selbst liegt
+als `/usr/local/share/rasphotspot/portal.html` und ist eine ganz normale
+HTML-Datei. Nach Änderungen:
+
+```bash
+sudo systemctl reload rasphotspot-portal    # Texte neu einlesen
+```
+
+Ganz abschalten: `PORTAL_ENABLE="no"` setzen und `sudo ./install.sh --skip-build`
+laufen lassen.
+
+> Das Begrüßungsfenster braucht `AP_OFFER_GATEWAY="yes"`, denn nur dann fragen
+> die Geräte den Pi überhaupt nach ihren Verbindungstests. Nebeneffekt: Android
+> meldet „WLAN ohne Internet" – die mobile Datenverbindung bleibt aber aktiv,
+> Apps nutzen weiter LTE.
+
+---
+
+## Latenz
+
+Voreingestellt ist der kürzeste Weg, Tonqualität ist dabei zweitrangig:
+
+| Stellschraube | Wert | Warum |
+|---|---|---|
+| `SB_BUFFER_SIZE` | `128` | Audiopuffer, bei 48 kHz rund **2,7 ms** je Richtung |
+| `SB_SEND_FORMAT` | `pcm16` | unkomprimiert – **kein Codec rechnet**, also keine Encoder-Verzögerung. Opus würde je nach Bitrate 2,5–20 ms zusätzlich kosten (1,5 Mbit/s statt ~200 kbit/s sind im lokalen WLAN kein Problem) |
+| `SB_JITTER_MS` | `5` | Startwert des Jitterpuffers |
+| `SB_JITTER_MODE` | `auto-full` | wächst bei Aussetzern, **schrumpft auch wieder** – die Verbindung pendelt sich auf den kürzesten stabilen Wert ein |
+| `AP_BAND` | `a` (5 GHz) | mehr Bandbreite, weniger Störungen als 2,4 GHz |
+
+Noch kürzer geht `SB_BUFFER_SIZE="64"` (1,3 ms). Wenn es knackst, ist der Weg
+zurück `128` → `256`. Bei Funkproblemen hilft eher näher rangehen als ein
+größerer Puffer.
+
+Diese Werte schreibt `rasphotspot-audio-setup` bei jedem Start in die
+SonoBus-Einstellungen (`defsendqual`, `defnetbuf`, `defnetauto`).
+**Wichtig:** Den Jitterpuffer auf der Empfangsseite bestimmt jedes Gerät selbst.
+Wer dort auf Nummer sicher gehen will, stellt in SonoBus beim Teilnehmer
+*MixPre-10T* den Puffer ebenfalls auf *Auto*.
+
+---
+
+## Autostart
+
+Nach der Installation braucht der Pi weder Bildschirm noch Anmeldung: Strom
+dran, ~30 Sekunden warten, fertig. Dafür sorgen
+
+* `aooserver.service`, `sonobus-sender.service` und `rasphotspot-portal.service`
+  – alle mit `systemctl enable` für den Boot aktiviert, alle mit
+  `Restart=always` und ohne Neustart-Bremse (`StartLimitIntervalSec=0`), sodass
+  sie sich auch nach wiederholten Fehlern immer wieder selbst starten;
+* der Hotspot – als NetworkManager-Profil mit `autoconnect yes`
+  bzw. über die aktivierten Dienste `hostapd` und `dnsmasq`;
+* eine udev-Regel, die den Sender neu startet, sobald das MixPre eingeschaltet
+  bzw. eingesteckt wird – die Reihenfolge beim Einschalten ist also egal;
+* `rasphotspot-sonobus-run`, das beim Start bis zu zwei Minuten auf
+  Audiointerface und Verbindungsserver wartet, statt aufzugeben.
+
+Prüfen lässt sich das mit einem Neustart:
+
+```bash
+sudo reboot
+# nach dem Hochfahren:
+rasphotspot-status
+```
+
+> Zieh den Stecker möglichst nicht mitten im Betrieb – wie bei jedem
+> Linux-Rechner kann das auf Dauer die SD-Karte beschädigen. Für den
+> Dauereinsatz lohnt sich ein `sudo raspi-config` → *Performance* → Overlay-FS,
+> dann ist das Dateisystem schreibgeschützt und Stromausfälle sind egal.
 
 ---
 
@@ -170,6 +274,10 @@ Die wichtigsten Schrauben:
 | `SB_ENABLE_OUTPUT` | Rückweg auf die USB-Returns des MixPre | `yes` |
 | `AUDIO_CARD_MATCH` | Suchmuster für die Soundkarte | `MixPre` |
 | `AUDIO_PCM_TYPE` | `hw` (direkt) oder `plug` (mit Umwandlung) | `hw` |
+| `SB_SEND_FORMAT` | Sendeformat, `pcm16` = niedrigste Latenz | `pcm16` |
+| `SB_JITTER_MS` / `SB_JITTER_MODE` | Start und Regelung des Jitterpuffers | `5` / `auto-full` |
+| `PORTAL_ENABLE` | Begrüßungsseite beim Einbuchen | `yes` |
+| `PORTAL_TITLE` / `PORTAL_NOTE` | Überschrift und Zusatzhinweis auf der Seite | `Live-Ton` / – |
 
 5 GHz ist für mehrere Zuhörer klar besser (mehr Bandbreite, weniger Störungen),
 2.4 GHz hat mehr Reichweite. Kann der Pi den gewünschten 5-GHz-Kanal nicht als
@@ -207,9 +315,30 @@ erreichbar).
 
 **Aussetzer / Knacksen**
 
-`SB_BUFFER_SIZE` erhöhen (z. B. `512` oder `1024`), auf 5 GHz wechseln, den
-Abstand verringern und in SonoBus auf den Client-Geräten die Jitter-Puffer auf
-„Auto" lassen.
+`SB_BUFFER_SIZE` von `128` auf `256` erhöhen, auf 5 GHz wechseln, den Abstand
+verringern und in SonoBus auf den Client-Geräten den Jitterpuffer auf „Auto"
+lassen. Hilft das nicht, `SB_SEND_FORMAT="opus96"` probieren – das braucht
+deutlich weniger Funkbandbreite und kostet nur wenige Millisekunden.
+
+**Die Begrüßungsseite erscheint nicht von selbst**
+
+```bash
+systemctl status rasphotspot-portal
+curl -I http://10.42.0.1/          # vom Pi aus
+```
+Die Seite ist immer unter `http://10.42.0.1` erreichbar – auch wenn das
+automatische Aufpoppen ausbleibt. Voraussetzung fürs Aufpoppen ist
+`AP_OFFER_GATEWAY="yes"` und ein dnsmasq, der alle Namen auf den Pi auflöst
+(`address=/#/10.42.0.1`). Auf Systemen mit NetworkManager steht das in
+`/etc/NetworkManager/dnsmasq-shared.d/rasphotspot.conf`, sonst in
+`/etc/dnsmasq.d/rasphotspot.conf`. Manche Android-Versionen zeigen statt der
+Seite nur eine Benachrichtigung – die muss man einmal antippen.
+
+**Der Knopf „Verbindungslink kopieren" tut nichts**
+
+Captive-Portal-Browser sind eingeschränkt. Dann die Seite in Safari/Chrome unter
+`http://10.42.0.1` öffnen oder Server, Port und Gruppe von Hand eintippen –
+beides steht auf der Seite.
 
 **Kein WLAN sichtbar**
 
@@ -253,13 +382,15 @@ sudo ./install.sh --force-build
 | `/etc/asound.conf` | erzeugte ALSA-Gerätenamen (`rasphotspot_in/out`) |
 | `/var/lib/sonobus/.config/sonobus/SonoBus.settings` | erzeugte SonoBus-Audioeinstellungen |
 | `/usr/local/bin/aooserver`, `/usr/local/bin/sonobus` | gebaute Programme |
-| `/usr/local/bin/rasphotspot-*` | Hilfsskripte (Status, Audio-Setup, Starter) |
+| `/usr/local/bin/rasphotspot-*` | Hilfsskripte (Status, Audio-Setup, Starter, Portal) |
+| `/usr/local/share/rasphotspot/portal.html` | die Begrüßungsseite |
 | `/usr/local/src/rasphotspot/` | Quellen für spätere Neubauten |
 | `/var/log/rasphotspot/` | Logdateien des Verbindungsservers |
 
 ### Die Dienste
 
 * **`aooserver.service`** – startet `aooserver --port=10998`, unabhängig vom Audio.
+* **`rasphotspot-portal.service`** – die Begrüßungsseite auf Port 80.
 * **`sonobus-sender.service`** – erkennt vor jedem Start das Audiointerface neu
   (`rasphotspot-audio-setup`), wartet auf Interface und Serverport und startet
   dann `sonobus --headless --group=ArizonaArizona --connectionserver=127.0.0.1:10998`.
@@ -292,7 +423,9 @@ sie braucht kein root und fasst das System nicht an:
 
 * SonoBus überträgt **unverschlüsselt**, und das WLAN ist **offen** – wer in
   Funkreichweite ist, kann mithören. Für vertrauliche Inhalte ein Gruppenpasswort
-  setzen (`SB_GROUP_PASSWORD`) und/oder das WLAN nicht offen betreiben.
+  setzen (`SB_GROUP_PASSWORD`; die Begrüßungsseite zeigt es dann an – wer das
+  nicht will, setzt zusätzlich `PORTAL_ENABLE="no"`) und/oder das WLAN nicht
+  offen betreiben.
 * SonoBus (GPLv3) und aooserver stammen von Jesse Chappell / Sonosaurus, die
   AOO-Bibliothek von Christof Ressi. Dieses Projekt baut und konfiguriert diese
   Programme lediglich.

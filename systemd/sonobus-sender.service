@@ -3,6 +3,7 @@ Description=SonoBus Sender: MixPre-10T in die SonoBus-Gruppe
 Documentation=https://sonobus.net
 After=aooserver.service sound.target
 Requires=aooserver.service
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple

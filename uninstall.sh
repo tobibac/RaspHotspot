@@ -21,7 +21,7 @@ need_root
 load_config
 
 step "Dienste stoppen"
-for unit in sonobus-sender aooserver; do
+for unit in sonobus-sender aooserver rasphotspot-portal; do
     systemctl disable --now "${unit}.service" >/dev/null 2>&1 || true
     rm -f "/etc/systemd/system/${unit}.service"
 done
@@ -53,7 +53,7 @@ systemctl daemon-reload
 
 step "Dateien entfernen"
 rm -f "${PREFIX}"/bin/rasphotspot-* "${PREFIX}/bin/aooserver" "${PREFIX}/bin/sonobus"
-rm -rf "${PREFIX}/lib/rasphotspot"
+rm -rf "${PREFIX}/lib/rasphotspot" "${PREFIX}/share/rasphotspot"
 rm -f /etc/udev/rules.d/99-rasphotspot-usb-audio.rules
 rm -f /etc/security/limits.d/95-rasphotspot-audio.conf
 udevadm control --reload-rules >/dev/null 2>&1 || true

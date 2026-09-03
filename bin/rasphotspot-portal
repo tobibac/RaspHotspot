@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+"""Begrüßungsseite (Captive Portal) für RaspHotspot.
+
+Serviert eine einzige Anleitungsseite auf Port 80. Weil der dnsmasq des
+Hotspots alle Namen auf den Pi auflöst, landen auch die Verbindungstests der
+Geräte hier – und weil wir darauf nicht mit "alles in Ordnung" antworten,
+zeigen iPhone, Android und Windows die Seite von selbst an.
+
+Gestartet von rasphotspot-portal.service, Konfiguration aus
+/etc/rasphotspot/rasphotspot.conf.
+"""
+
+import html
+import os
+import re
+import signal
+import sys
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+CONF_FILE = os.environ.get("RASPHOTSPOT_CONF", "/etc/rasphotspot/rasphotspot.conf")
+TEMPLATE_FILE = os.environ.get(
+    "RASPHOTSPOT_PORTAL_TEMPLATE", "/usr/local/share/rasphotspot/portal.html"
+)
+
+# Android meldet "Internet vorhanden", sobald es hier eine 204 bekommt. Deshalb
+# antworten wir auf genau diese Pfade mit einer Weiterleitung auf die Seite –
+# dann erscheint die Anmelde-Benachrichtigung.
+REDIRECT_PATHS = {"/generate_204", "/gen_204", "/generate204"}
+
+CONF_LINE = re.compile(r'^\s*([A-Z_][A-Z0-9_]*)\s*=\s*"?(.*?)"?\s*$')
+
+
+def read_config(path):
+    """Liest die Shell-artige Konfigurationsdatei (KEY="wert")."""
+    conf = {}
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                if not line.strip() or line.lstrip().startswith("#"):
+                    continue
+                match = CONF_LINE.match(line)
+                if match:
+                    conf[match.group(1)] = match.group(2)
+    except OSError as exc:
+        print(f"Konfiguration nicht lesbar ({exc}) – nehme Standardwerte.", flush=True)
+    return conf
+
+
+def url_quote(value):
+    safe = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.~_-"
+    return "".join(c if c in safe else f"%{b:02X}" for c in value for b in c.encode())
+
+
+def build_page(conf):
+    ip = conf.get("AP_IP", "10.42.0.1")
+    port = conf.get("SB_SERVER_PORT", "10998")
+    group = conf.get("SB_GROUP", "SonoBus")
+    password = conf.get("SB_GROUP_PASSWORD", "")
+
+    link = f"sonobus://{ip}:{port}/?g={url_quote(group)}"
+    if password:
+        link += f"&p={url_quote(password)}"
+
+    if password:
+        password_row = (
+            '<tr><td class="k">Passwort</td>'
+            f'<td class="v">{html.escape(password)}</td>'
+            f'<td class="c"><button class="copy" type="button" '
+            f'data-copy="{html.escape(password, quote=True)}">Kopieren</button></td></tr>'
+        )
+    else:
+        password_row = (
+            '<tr><td class="k">Passwort</td>'
+            '<td class="v" colspan="2">– keins –</td></tr>'
+        )
+
+    note = conf.get("PORTAL_NOTE", "").strip()
+    note_block = (
+        f'<div class="card"><p style="margin:0">{html.escape(note)}</p></div>'
+        if note
+        else ""
+    )
+
+    try:
+        with open(TEMPLATE_FILE, "r", encoding="utf-8") as fh:
+            template = fh.read()
+    except OSError as exc:
+        return (
+            "<!doctype html><meta charset=utf-8><title>SonoBus</title>"
+            f"<h1>{html.escape(group)}</h1>"
+            f"<p>Server {html.escape(ip)}, Port {html.escape(port)}, "
+            f"Gruppe {html.escape(group)}</p>"
+            f"<p><a href=\"{html.escape(link, quote=True)}\">Verbinden</a></p>"
+            f"<!-- Vorlage fehlt: {html.escape(str(exc))} -->"
+        ).encode("utf-8")
+
+    replacements = {
+        "@TITLE@": html.escape(conf.get("PORTAL_TITLE", "Live-Ton")),
+        "@SSID@": html.escape(conf.get("AP_SSID", "SonoBus")),
+        "@GROUP@": html.escape(group),
+        "@USERNAME@": html.escape(conf.get("SB_USERNAME", "Sender")),
+        "@SERVER_IP@": html.escape(ip),
+        "@PORT@": html.escape(port),
+        "@LINK@": html.escape(link, quote=True),
+        "@PASSWORD_ROW@": password_row,
+        "@NOTE_BLOCK@": note_block,
+    }
+    for key, value in replacements.items():
+        template = template.replace(key, value)
+    return template.encode("utf-8")
+
+
+class PortalHandler(BaseHTTPRequestHandler):
+    server_version = "RaspHotspot"
+    sys_version = ""
+    protocol_version = "HTTP/1.1"
+
+    # --- Antworten ---------------------------------------------------------
+    def _send(self, code, body=b"", content_type="text/html; charset=utf-8", extra=None):
+        self.send_response(code)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store, must-revalidate")
+        self.send_header("Connection", "close")
+        for key, value in (extra or {}).items():
+            self.send_header(key, value)
+        self.end_headers()
+        if body and self.command != "HEAD":
+            self.wfile.write(body)
+
+    def _handle(self):
+        path = self.path.split("?", 1)[0]
+
+        if path == "/health":
+            self._send(200, b"ok\n", "text/plain; charset=utf-8")
+            return
+
+        if path in REDIRECT_PATHS:
+            target = f"http://{self.server.portal_host}/"
+            self._send(302, b"", "text/html; charset=utf-8", {"Location": target})
+            return
+
+        # Alles andere: die Anleitungsseite. Sie enthält bewusst nicht die
+        # Erfolgsmeldung, die iOS erwartet – dadurch öffnet sich das Portal.
+        self._send(200, self.server.page)
+
+    def do_GET(self):
+        self._handle()
+
+    def do_HEAD(self):
+        self._handle()
+
+    def do_POST(self):
+        self._handle()
+
+    def log_message(self, fmt, *args):
+        # Knapp halten: Geräte pollen ihre Verbindungstests im Sekundentakt.
+        if self.path.split("?", 1)[0] in ("/", "/index.html"):
+            print(f"Portal geöffnet von {self.client_address[0]}", flush=True)
+
+
+def main():
+    conf = read_config(CONF_FILE)
+
+    if conf.get("PORTAL_ENABLE", "yes") != "yes":
+        print("Begrüßungsseite ist abgeschaltet (PORTAL_ENABLE != yes).", flush=True)
+        return 0
+
+    port = int(conf.get("PORTAL_PORT", "80") or 80)
+    host_ip = conf.get("AP_IP", "10.42.0.1")
+
+    server = ThreadingHTTPServer(("0.0.0.0", port), PortalHandler)
+    server.daemon_threads = True
+    server.page = build_page(conf)
+    server.portal_host = host_ip
+
+    def reload_page(signum, frame):
+        conf_new = read_config(CONF_FILE)
+        server.page = build_page(conf_new)
+        server.portal_host = conf_new.get("AP_IP", host_ip)
+        print("Seite neu erzeugt (SIGHUP).", flush=True)
+
+    def stop(signum, frame):
+        print("Beende Begrüßungsseite.", flush=True)
+        # shutdown() wartet, bis serve_forever() zurückkehrt. Aus dem
+        # Signalhandler heraus im selben Thread aufgerufen würde sich das
+        # gegenseitig blockieren – also in einem eigenen Thread beenden.
+        threading.Thread(target=server.shutdown, daemon=True).start()
+
+    signal.signal(signal.SIGHUP, reload_page)
+    signal.signal(signal.SIGTERM, stop)
+
+    print(
+        f"Begrüßungsseite läuft auf Port {port} "
+        f"(Gruppe {conf.get('SB_GROUP', '?')}, Server {host_ip})",
+        flush=True,
+    )
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

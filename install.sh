@@ -175,6 +175,8 @@ install -m 644 "${HERE}/lib/common.sh" "${PREFIX}/lib/rasphotspot/common.sh"
 for f in "${HERE}"/bin/*; do
     install -m 755 "$f" "${PREFIX}/bin/$(basename "$f")"
 done
+install -d -m 755 "${PREFIX}/share/rasphotspot"
+install -m 644 "${HERE}/portal/portal.html" "${PREFIX}/share/rasphotspot/portal.html"
 install -m 644 "${HERE}/udev/99-rasphotspot-usb-audio.rules" \
         /etc/udev/rules.d/99-rasphotspot-usb-audio.rules
 udevadm control --reload-rules >/dev/null 2>&1 || true
@@ -213,7 +215,10 @@ fi
 # =============================================================================
 step "6/8  systemd-Dienste einrichten"
 # =============================================================================
-for unit in aooserver sonobus-sender; do
+UNITS=(aooserver sonobus-sender)
+[ "${PORTAL_ENABLE:-yes}" = "yes" ] && UNITS+=(rasphotspot-portal)
+
+for unit in "${UNITS[@]}"; do
     sed -e "s|@SERVICE_USER@|${SERVICE_USER}|g" \
         -e "s|@SERVICE_HOME@|${SERVICE_HOME}|g" \
         -e "s|@LOG_DIR@|${SB_SERVER_LOGDIR:-/var/log/rasphotspot}|g" \
@@ -221,8 +226,16 @@ for unit in aooserver sonobus-sender; do
     chmod 644 "/etc/systemd/system/${unit}.service"
 done
 systemctl daemon-reload
-systemctl enable aooserver.service sonobus-sender.service >/dev/null
-ok "Dienste aooserver.service und sonobus-sender.service eingerichtet"
+for unit in "${UNITS[@]}"; do
+    systemctl enable "${unit}.service" >/dev/null
+    ok "${unit}.service eingerichtet und für den Autostart aktiviert"
+done
+
+if [ "${PORTAL_ENABLE:-yes}" != "yes" ]; then
+    systemctl disable --now rasphotspot-portal.service >/dev/null 2>&1 || true
+    rm -f /etc/systemd/system/rasphotspot-portal.service
+    systemctl daemon-reload
+fi
 
 # =============================================================================
 step "7/8  WLAN-Hotspot einrichten"
@@ -237,6 +250,16 @@ fi
 step "8/8  Dienste starten"
 # =============================================================================
 systemctl restart aooserver.service
+ok "aooserver gestartet"
+
+if [ "${PORTAL_ENABLE:-yes}" = "yes" ]; then
+    if systemctl restart rasphotspot-portal.service; then
+        ok "Begrüßungsseite gestartet (http://${AP_IP}/)"
+    else
+        warn "Begrüßungsseite konnte nicht starten – Logs: journalctl -u rasphotspot-portal -n 30"
+    fi
+fi
+
 if systemctl restart sonobus-sender.service; then
     ok "sonobus-sender gestartet"
 else
@@ -251,6 +274,8 @@ SonoBus-Gruppe "${SB_GROUP}" auf diesem Raspberry Pi
 =====================================================
 
 1. Mit dem offenen WLAN "${AP_SSID}" verbinden (kein Passwort).
+   Auf den meisten Geräten öffnet sich die Anleitungsseite dann von selbst.
+   Sonst im Browser aufrufen: http://${AP_IP}/
 
 2. SonoBus öffnen (sonobus.net) und im Verbindungsfenster eintragen:
 
@@ -279,9 +304,13 @@ log "  Verbindungsserver: ${C_BLD}${AP_IP}:${SB_SERVER_PORT}${C_RST}"
 log "  Gruppe          : ${C_BLD}${SB_GROUP}${C_RST}"
 log "  Link            : ${LINK}"
 log ""
+log "  Begrüßungsseite : http://${AP_IP}/ (öffnet sich beim Einbuchen von selbst)"
+log "  Latenz          : ${SB_SEND_FORMAT}, Puffer ${SB_BUFFER_SIZE} Samples, Jitterpuffer ${SB_JITTER_MS} ms"
+log ""
 log "  Zustand prüfen  : rasphotspot-status"
 log "  Diese Infos     : ${CONF_DIR}/connect-info.txt"
 log ""
 log "  Am MixPre-10T muss USB-Audio aktiv sein (Menü: System > USB > Audio Interface)."
-log "  Nach dem ersten Einrichten einmal neu starten: sudo reboot"
+log "  Alles startet ab jetzt automatisch, sobald der Pi Strom bekommt."
+log "  Zum Prüfen einmal neu starten: sudo reboot"
 log ""

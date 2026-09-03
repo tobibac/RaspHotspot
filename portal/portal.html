@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>@TITLE@ – verbinden</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --card: #ffffff;
+    --ink: #14171a;
+    --muted: #5c6570;
+    --line: #e2e6ea;
+    --accent: #1f6feb;
+    --accent-ink: #ffffff;
+    --warn-bg: #fff5e0;
+    --warn-line: #f0d191;
+    --warn-ink: #6b4e00;
+    --ok: #1a7f4b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171a;
+      --card: #1d2126;
+      --ink: #eef1f4;
+      --muted: #9aa4af;
+      --line: #2c3339;
+      --accent: #4c8dff;
+      --accent-ink: #0d1117;
+      --warn-bg: #33290f;
+      --warn-line: #5c4a1c;
+      --warn-ink: #f2d79a;
+      --ok: #52c288;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 0 16px calc(40px + env(safe-area-inset-bottom));
+    background: var(--bg);
+    color: var(--ink);
+    font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  .wrap { max-width: 560px; margin: 0 auto; }
+  header { padding: 28px 0 18px; }
+  h1 { margin: 0 0 6px; font-size: 26px; line-height: 1.2; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 15px; margin: 0; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 18px;
+    margin: 0 0 14px;
+  }
+  .warn {
+    background: var(--warn-bg);
+    border-color: var(--warn-line);
+    color: var(--warn-ink);
+  }
+  .warn strong { display: block; margin-bottom: 4px; }
+  h2 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin: 0 0 12px;
+    font-weight: 600;
+  }
+  .step { display: flex; gap: 10px; align-items: baseline; margin: 0 0 12px; }
+  .num {
+    flex: 0 0 24px; height: 24px; border-radius: 50%;
+    background: var(--accent); color: var(--accent-ink);
+    font-size: 13px; font-weight: 700; line-height: 24px; text-align: center;
+  }
+  .step h3 { margin: 0; font-size: 18px; line-height: 1.3; }
+  p { margin: 0 0 12px; }
+  p.hint { color: var(--muted); font-size: 14px; margin-bottom: 0; }
+  a { color: var(--accent); }
+  .btn {
+    display: block; width: 100%;
+    padding: 15px 16px; margin: 0 0 10px;
+    border: 0; border-radius: 11px;
+    background: var(--accent); color: var(--accent-ink);
+    font: inherit; font-weight: 600; text-align: center; text-decoration: none;
+    cursor: pointer;
+    -webkit-appearance: none;
+  }
+  .btn.secondary {
+    background: transparent;
+    color: var(--ink);
+    border: 1px solid var(--line);
+    font-weight: 500;
+  }
+  .btn:active { opacity: 0.7; }
+  .btn.done { background: var(--ok); color: #fff; }
+  table { width: 100%; border-collapse: collapse; margin: 4px 0 0; }
+  td { padding: 11px 0; border-top: 1px solid var(--line); vertical-align: middle; }
+  tr:first-child td { border-top: 0; }
+  td.k { color: var(--muted); font-size: 14px; width: 34%; }
+  td.v { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 16px; word-break: break-all; }
+  td.c { width: 1%; text-align: right; }
+  .copy {
+    border: 1px solid var(--line); background: transparent; color: var(--ink);
+    border-radius: 8px; padding: 7px 11px; font: inherit; font-size: 13px; cursor: pointer;
+    white-space: nowrap;
+  }
+  .copy.done { border-color: var(--ok); color: var(--ok); }
+  ul { margin: 0; padding-left: 20px; }
+  li { margin-bottom: 8px; }
+  li:last-child { margin-bottom: 0; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.95em; }
+  footer { color: var(--muted); font-size: 13px; text-align: center; padding: 8px 0 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>@TITLE@</h1>
+    <p class="sub">WLAN <strong>@SSID@</strong> · Gruppe <strong>@GROUP@</strong></p>
+  </header>
+
+  <div class="card warn">
+    <strong>Dieses WLAN hat kein Internet.</strong>
+    Es überträgt nur den Ton. Zum Herunterladen der App brauchst du kurz eine
+    andere Verbindung – wie das geht, steht in Schritt 1.
+  </div>
+
+  @NOTE_BLOCK@
+
+  <div class="card">
+    <div class="step"><span class="num">1</span><h3>SonoBus installieren</h3></div>
+    <p>Kostenlos für iPhone, Android, Mac, Windows und Linux. Hast du die App
+      schon, geht es direkt bei Schritt 2 weiter.</p>
+    <p><strong>Wichtig:</strong> Zum Laden musst du dieses WLAN kurz verlassen –
+      mobile Daten einschalten oder ein anderes WLAN wählen. Danach wieder
+      zurück ins WLAN <strong>@SSID@</strong>.</p>
+    <a class="btn secondary" href="https://play.google.com/store/apps/details?id=com.sonosaurus.sonobus">Android: Play Store</a>
+    <a class="btn secondary" href="https://apps.apple.com/search?term=sonobus">iPhone/iPad: App Store</a>
+    <a class="btn secondary" href="https://sonobus.net">Mac, Windows, Linux: sonobus.net</a>
+    <p class="hint">Diese drei Links funktionieren erst, wenn du wieder Internet
+      hast. Alternativ im App Store bzw. Play Store nach „SonoBus" suchen.</p>
+  </div>
+
+  <div class="card">
+    <div class="step"><span class="num">2</span><h3>Mit der Gruppe verbinden</h3></div>
+    <p>Der bequemste Weg: Link kopieren, dann SonoBus öffnen – die App erkennt
+      den Link aus der Zwischenablage und trägt alles selbst ein. Dann nur noch
+      auf <em>Verbinden</em> bzw. <em>Gruppe betreten</em> tippen.</p>
+    <button class="btn" type="button" data-copy="@LINK@" data-label="Verbindungslink kopieren">Verbindungslink kopieren</button>
+    <a class="btn secondary" href="@LINK@">SonoBus direkt öffnen (iPhone, Mac, PC)</a>
+    <p class="hint">Passiert beim direkten Öffnen nichts, nimm den Weg über den
+      kopierten Link – der klappt überall.</p>
+  </div>
+
+  <div class="card">
+    <h2>Oder von Hand eintragen</h2>
+    <p class="hint" style="margin-bottom:12px">In SonoBus im Verbindungsfenster
+      auf „Eigener Server" / „Connect to Group" und diese Werte eintragen.
+      Der voreingestellte Server <code>aoo.sonobus.net</code> funktioniert hier
+      nicht, weil dieses WLAN kein Internet hat.</p>
+    <table>
+      <tr>
+        <td class="k">Server</td>
+        <td class="v">@SERVER_IP@</td>
+        <td class="c"><button class="copy" type="button" data-copy="@SERVER_IP@">Kopieren</button></td>
+      </tr>
+      <tr>
+        <td class="k">Port</td>
+        <td class="v">@PORT@</td>
+        <td class="c"><button class="copy" type="button" data-copy="@PORT@">Kopieren</button></td>
+      </tr>
+      <tr>
+        <td class="k">Gruppe</td>
+        <td class="v">@GROUP@</td>
+        <td class="c"><button class="copy" type="button" data-copy="@GROUP@">Kopieren</button></td>
+      </tr>
+      @PASSWORD_ROW@
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Damit es gut klingt</h2>
+    <ul>
+      <li><strong>Kopfhörer aufsetzen.</strong> Über Lautsprecher gibt es
+        Rückkopplungen, sobald jemand ein Mikrofon offen hat.</li>
+      <li><strong>Eigenes Mikrofon stumm schalten</strong> (in SonoBus oben das
+        Mikrofonsymbol), wenn du nur zuhören willst.</li>
+      <li><strong>Bei Aussetzern:</strong> näher an den Sender gehen. In SonoBus
+        beim Teilnehmer <em>@USERNAME@</em> den Jitterpuffer auf <em>Auto</em>
+        stellen – kleiner Puffer heißt weniger Verzögerung, aber mehr Risiko.</li>
+      <li><strong>Diese Seite</strong> erreichst du jederzeit wieder unter
+        <a href="http://@SERVER_IP@/">http://@SERVER_IP@</a>.</li>
+    </ul>
+  </div>
+
+  <footer>Ton von @USERNAME@ · Gruppe @GROUP@ · @SERVER_IP@:@PORT@</footer>
+</div>
+
+<script>
+(function () {
+  function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      return navigator.clipboard.writeText(text);
+    }
+    // Captive-Portal-Browser laufen über http – da fehlt die Clipboard-API.
+    return new Promise(function (resolve, reject) {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.top = '0';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      ta.setSelectionRange(0, ta.value.length);
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+      document.body.removeChild(ta);
+      ok ? resolve() : reject(new Error('copy failed'));
+    });
+  }
+
+  document.addEventListener('click', function (ev) {
+    var el = ev.target.closest('[data-copy]');
+    if (!el) return;
+    var text = el.getAttribute('data-copy');
+    var original = el.getAttribute('data-label') || el.textContent;
+    copyText(text).then(function () {
+      el.textContent = 'Kopiert ✓';
+      el.classList.add('done');
+      setTimeout(function () {
+        el.textContent = original;
+        el.classList.remove('done');
+      }, 2000);
+    }).catch(function () {
+      el.textContent = 'Bitte von Hand kopieren';
+      setTimeout(function () { el.textContent = original; }, 2500);
+    });
+  });
+})();
+</script>
+</body>
+</html>

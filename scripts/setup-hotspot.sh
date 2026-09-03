@@ -51,6 +51,13 @@ if [ "$BAND" = "a" ] && command -v iw >/dev/null 2>&1; then
 fi
 info "Band: ${BAND} (Kanal ${CHANNEL}), SSID '${AP_SSID}' – offen, ohne Passwort"
 
+# Das Begrüßungsfenster funktioniert nur, wenn die Geräte den Pi als Gateway
+# und DNS bekommen – sonst fragen sie ihn gar nicht erst.
+if [ "${PORTAL_ENABLE:-yes}" = "yes" ] && [ "${AP_OFFER_GATEWAY}" != "yes" ]; then
+    warn "PORTAL_ENABLE=yes braucht AP_OFFER_GATEWAY=yes – setze das für diesen Lauf."
+    AP_OFFER_GATEWAY="yes"
+fi
+
 install -d -m 755 "$STATE_DIR"
 
 # =============================================================================
@@ -59,23 +66,25 @@ install -d -m 755 "$STATE_DIR"
 setup_networkmanager() {
     info "Konfiguriere Hotspot über NetworkManager"
 
-    # DHCP-Optionen für den internen dnsmasq von NetworkManager.
+    # DHCP-/DNS-Optionen für den internen dnsmasq von NetworkManager.
     install -d -m 755 /etc/NetworkManager/dnsmasq-shared.d
-    if [ "${AP_OFFER_GATEWAY}" = "yes" ]; then
-        cat > /etc/NetworkManager/dnsmasq-shared.d/rasphotspot.conf <<CONF
-# RaspHotspot: Pi als Gateway/DNS anbieten
-dhcp-option=3,${AP_IP}
-dhcp-option=6,${AP_IP}
-CONF
-    else
-        cat > /etc/NetworkManager/dnsmasq-shared.d/rasphotspot.conf <<CONF
-# RaspHotspot: bewusst KEIN Gateway und KEIN DNS anbieten.
-# Der Hotspot hat keinen Internetzugang – so behalten Handys ihre
-# Mobilfunkverbindung, während sie im SonoBus-WLAN sind.
-dhcp-option=3
-dhcp-option=6
-CONF
-    fi
+    {
+        echo "# Automatisch erzeugt von RaspHotspot"
+        if [ "${PORTAL_ENABLE:-yes}" = "yes" ]; then
+            echo "# Alle Namen zeigen auf den Pi, damit die Verbindungstests der"
+            echo "# Geräte auf der Begrüßungsseite landen."
+            echo "address=/#/${AP_IP}"
+        fi
+        if [ "${AP_OFFER_GATEWAY}" = "yes" ]; then
+            echo "dhcp-option=3,${AP_IP}"
+            echo "dhcp-option=6,${AP_IP}"
+        else
+            echo "# Bewusst kein Gateway und kein DNS: der Hotspot hat kein Internet,"
+            echo "# Handys behalten so ihre Mobilfunkverbindung."
+            echo "dhcp-option=3"
+            echo "dhcp-option=6"
+        fi
+    } > /etc/NetworkManager/dnsmasq-shared.d/rasphotspot.conf
 
     if nmcli -t -f NAME connection show 2>/dev/null | grep -qx "${AP_CON_NAME}"; then
         nmcli connection delete "${AP_CON_NAME}" >/dev/null
@@ -193,6 +202,11 @@ CONF
         echo "interface=${IFACE}"
         echo "bind-interfaces"
         echo "dhcp-range=${AP_DHCP_START},${AP_DHCP_END},255.255.255.0,24h"
+        if [ "${PORTAL_ENABLE:-yes}" = "yes" ]; then
+            echo "# Alle Namen zeigen auf den Pi, damit die Verbindungstests der"
+            echo "# Geräte auf der Begrüßungsseite landen."
+            echo "address=/#/${AP_IP}"
+        fi
         if [ "${AP_OFFER_GATEWAY}" = "yes" ]; then
             echo "dhcp-option=3,${AP_IP}"
             echo "dhcp-option=6,${AP_IP}"

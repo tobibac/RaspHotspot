@@ -65,6 +65,8 @@ else
     list_audio_cards | sed 's/^/    /'
 fi
 log "  Gesendet     : Kanal ${SB_INPUT_FIRST_CHANNEL}-$(( SB_INPUT_FIRST_CHANNEL + SB_INPUT_CHANNELS - 1 )), ${SB_SAMPLE_RATE} Hz, Puffer ${SB_BUFFER_SIZE}"
+log "  Format       : ${SB_SEND_FORMAT} · Jitterpuffer ${SB_JITTER_MS} ms (${SB_JITTER_MODE})"
+log "  Audiopuffer  : $(awk -v b="${SB_BUFFER_SIZE:-128}" -v r="${SB_SAMPLE_RATE:-48000}" 'BEGIN { printf "%.1f", 1000 * b / r }') ms pro Richtung"
 
 # --- SonoBus -----------------------------------------------------------------
 log ""
@@ -84,6 +86,21 @@ fi
 if systemctl is-active --quiet aooserver 2>/dev/null; then
     peers="$(journalctl -u aooserver -n 200 --no-pager 2>/dev/null | grep -iE 'group|client' | tail -3)"
     [ -n "$peers" ] && { log ""; log "  Letzte Servermeldungen:"; printf '%s\n' "$peers" | sed 's/^/    /'; }
+fi
+
+# --- Begrüßungsseite ---------------------------------------------------------
+log ""
+log "${C_BLD}Begrüßungsseite${C_RST}"
+if [ "${PORTAL_ENABLE:-yes}" = "yes" ]; then
+    log "  Dienst       : $(state rasphotspot-portal)"
+    log "  Adresse      : http://${AP_IP}/"
+    if wait_for_port 127.0.0.1 "${PORTAL_PORT:-80}" 1; then
+        log "  Port ${PORTAL_PORT:-80}      : ${C_GRN}erreichbar${C_RST}"
+    else
+        log "  Port ${PORTAL_PORT:-80}      : ${C_RED}nicht erreichbar${C_RST}"
+    fi
+else
+    log "  abgeschaltet (PORTAL_ENABLE=\"no\")"
 fi
 
 log ""

@@ -138,6 +138,38 @@ channel_bitmask() {
     printf '%s' "$out"
 }
 
+# --- Latenz -----------------------------------------------------------------
+# SonoBus-Sendeformat -> Index in der Formatliste des Programms.
+# PCM ist unkomprimiert und damit ohne Encoder-Verzögerung; Opus spart
+# Bandbreite, kostet je nach Bitrate 2,5 bis 20 ms.
+send_format_index() {
+    case "${1:-pcm16}" in
+        opus16)  printf '0'  ;;
+        opus24)  printf '1'  ;;
+        opus48)  printf '2'  ;;
+        opus64)  printf '3'  ;;
+        opus96)  printf '4'  ;;
+        opus128) printf '5'  ;;
+        opus160) printf '6'  ;;
+        opus256) printf '7'  ;;
+        pcm16)   printf '8'  ;;
+        pcm24)   printf '9'  ;;
+        pcm32)   printf '10' ;;
+        *)       printf '8'; return 1 ;;
+    esac
+}
+
+# Regelverhalten des Jitterpuffers -> Index des SonoBus-Parameters.
+jitter_mode_index() {
+    case "${1:-auto-full}" in
+        off)       printf '0' ;;
+        auto-up)   printf '1' ;;
+        auto-full) printf '2' ;;
+        initial)   printf '3' ;;
+        *)         printf '2'; return 1 ;;
+    esac
+}
+
 # --- Konfiguration schreiben ------------------------------------------------
 # Erzeugt aus der Vorlage eine Konfigurationsdatei, in der jeder Schlüssel durch
 # den aktuell gültigen Wert ersetzt ist. Kommentare bleiben erhalten.
