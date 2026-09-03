@@ -39,6 +39,11 @@ if [ "$mem_mb" -lt 1800 ] && [ "$swap_mb" -lt 900 ]; then
     warn "danach 'sudo systemctl restart dphys-swapfile')."
 fi
 
+# SonoBus baut mit JUCE_JACK=1 – ohne diese Header bricht der Build mittendrin ab.
+if [ ! -f /usr/include/jack/jack.h ] && ! compgen -G "/usr/include/*/jack/jack.h" >/dev/null; then
+    die "jack/jack.h fehlt – bitte 'sudo apt install libjack-jackd2-dev' ausführen."
+fi
+
 info "Konfiguriere Build (cmake)"
 cmake -DCMAKE_BUILD_TYPE=Release -B "${DIR}/build" -S "$DIR"
 

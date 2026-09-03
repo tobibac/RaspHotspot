@@ -70,6 +70,20 @@ check "keine Zeilenfortsetzung/Substitution" \
       "$(grep -cE '\$\(|`' "${tmp}/conf")" "0"
 rm -rf "$tmp"
 
+echo "Kommandozeilen-Format (JUCE nimmt Langoptionen nur als --option=wert)"
+runner_sb="${ROOT}/bin/rasphotspot-sonobus-run"
+runner_aoo="${ROOT}/bin/rasphotspot-aooserver-run"
+check "SonoBus: --group="        "$(grep -c -- '"--group=\${SB_GROUP}"' "$runner_sb")" "1"
+check "SonoBus: --username="     "$(grep -c -- '"--username=\${SB_USERNAME}"' "$runner_sb")" "1"
+check "SonoBus: --connectionserver=" \
+      "$(grep -c -- '"--connectionserver=127.0.0.1:\${SB_SERVER_PORT}"' "$runner_sb")" "1"
+check "SonoBus: keine Langoption mit Leerzeichen" \
+      "$(grep -cE '^\s+--[a-z-]+ +"' "$runner_sb")" "0"
+check "aooserver: --port="       "$(grep -c -- '"--port=' "$runner_aoo")" "1"
+check "aooserver: --logdir="     "$(grep -c -- '"--logdir=' "$runner_aoo")" "1"
+check "aooserver: keine Langoption mit Leerzeichen" \
+      "$(grep -cE '(args=\(|args\+=\()--[a-z-]+ ' "$runner_aoo")" "0"
+
 echo "Build-Parallelität"
 check "mindestens 1 Job" "$([ "$(build_jobs)" -ge 1 ] && echo ja)" "ja"
 

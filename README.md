@@ -147,9 +147,9 @@ Alle Einstellungen stehen in **`/etc/rasphotspot/rasphotspot.conf`**
 (Vorlage mit Kommentaren: `config.env.example`). Nach Änderungen:
 
 ```bash
-sudo systemctl restart aooserver sonobus-sender     # Audio/Gruppe
-sudo /usr/local/lib/../bin/rasphotspot-audio-setup  # nur Audiogerät neu schreiben
-sudo ./scripts/setup-hotspot.sh                     # WLAN neu einrichten
+sudo systemctl restart aooserver sonobus-sender   # Gruppe/Audio übernehmen
+sudo rasphotspot-audio-setup                      # nur das Audiogerät neu schreiben
+sudo ./scripts/setup-hotspot.sh                   # WLAN neu einrichten
 ```
 
 Die wichtigsten Schrauben:
@@ -221,6 +221,17 @@ sudo systemctl status hostapd         # (auf Systemen ohne NetworkManager)
 Auf 5 GHz muss das Funkland stimmen (`AP_COUNTRY`), sonst sind die Kanäle
 gesperrt.
 
+**Bauen schlägt fehl: `jack/jack.h` fehlt**
+
+SonoBus wird mit `JUCE_JACK=1` gebaut und braucht die JACK-Header:
+
+```bash
+sudo apt install libjack-jackd2-dev
+```
+
+Auf Desktop-Images kann apt dabei `pipewire-jack` ersetzen wollen. Auf einem
+Lite-Image (Empfehlung für diese Basisstation) ist das kein Thema.
+
 **Bauen schlägt fehl (Speicher)**
 
 Swap vergrößern und neu bauen:
@@ -248,10 +259,10 @@ sudo ./install.sh --force-build
 
 ### Die Dienste
 
-* **`aooserver.service`** – startet `aooserver --port 10998`, unabhängig vom Audio.
+* **`aooserver.service`** – startet `aooserver --port=10998`, unabhängig vom Audio.
 * **`sonobus-sender.service`** – erkennt vor jedem Start das Audiointerface neu
   (`rasphotspot-audio-setup`), wartet auf Interface und Serverport und startet
-  dann `sonobus --headless --group ArizonaArizona --connectionserver 127.0.0.1:10998`.
+  dann `sonobus --headless --group=ArizonaArizona --connectionserver=127.0.0.1:10998`.
   Beide starten bei Fehlern automatisch neu.
 
 ---
@@ -266,6 +277,16 @@ Entfernt Dienste, Skripte, Konfiguration, Hotspot-Einstellungen und den
 Dienstbenutzer. Installierte apt-Pakete bleiben erhalten.
 
 ---
+
+## Tests
+
+Die Hilfsfunktionen (Kartenerkennung, Kanalmasken, Verbindungslink, Erzeugen der
+Konfiguration, Format der Kommandozeilenoptionen) haben eine kleine Testsuite –
+sie braucht kein root und fasst das System nicht an:
+
+```bash
+./tests/run-tests.sh
+```
 
 ## Hinweise
 

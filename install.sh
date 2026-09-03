@@ -91,7 +91,14 @@ REQUIRED_PKGS=(
     libgl-dev
     alsa-utils iw rfkill
 )
-OPTIONAL_PKGS=(libjack-jackd2-dev opus-tools xvfb)
+OPTIONAL_PKGS=(opus-tools xvfb)
+
+# JACK-Header: SonoBus baut mit JUCE_JACK=1, ohne jack/jack.h bricht der Build ab.
+if apt-cache show libjack-jackd2-dev >/dev/null 2>&1; then
+    REQUIRED_PKGS+=(libjack-jackd2-dev)
+else
+    REQUIRED_PKGS+=(libjack-dev)
+fi
 
 # libcurl: je nach Distribution openssl- oder gnutls-Variante
 if apt-cache show libcurl4-openssl-dev >/dev/null 2>&1; then

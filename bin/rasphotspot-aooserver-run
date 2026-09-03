@@ -9,11 +9,13 @@ LIB_DIR="/usr/local/lib/rasphotspot"
 
 load_config
 
-args=(--port "${SB_SERVER_PORT:-10998}")
+# Achtung: aooserver (JUCE) nimmt Werte bei Langoptionen nur als --option=wert
+# an. Mit Leerzeichen getrennt werden sie kommentarlos ignoriert.
+args=("--port=${SB_SERVER_PORT:-10998}")
 
 # Logverzeichnis nur benutzen, wenn es existiert und beschreibbar ist.
 if [ -n "${SB_SERVER_LOGDIR:-}" ] && [ -w "${SB_SERVER_LOGDIR}" ]; then
-    args+=(--logdir "${SB_SERVER_LOGDIR}")
+    args+=("--logdir=${SB_SERVER_LOGDIR}")
 fi
 
 log "aooserver auf Port ${SB_SERVER_PORT:-10998} (Gruppe: ${SB_GROUP})"

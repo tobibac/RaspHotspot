@@ -30,13 +30,16 @@ if ! wait_for_port 127.0.0.1 "${SB_SERVER_PORT:-10998}" 60; then
 fi
 
 # 3. SonoBus starten.
+# Achtung: SonoBus (JUCE) nimmt Werte bei Langoptionen nur in der Form
+# --option=wert an. Mit Leerzeichen getrennt werden sie ignoriert und der
+# Headless-Start bricht mit "you need to specify a group" ab.
 args=(
     --headless
-    --group "${SB_GROUP}"
-    --username "${SB_USERNAME}"
-    --connectionserver "127.0.0.1:${SB_SERVER_PORT}"
+    "--group=${SB_GROUP}"
+    "--username=${SB_USERNAME}"
+    "--connectionserver=127.0.0.1:${SB_SERVER_PORT}"
 )
-[ -n "${SB_GROUP_PASSWORD:-}" ] && args+=(--group-password "${SB_GROUP_PASSWORD}")
+[ -n "${SB_GROUP_PASSWORD:-}" ] && args+=("--group-password=${SB_GROUP_PASSWORD}")
 
 log "SonoBus: Gruppe '${SB_GROUP}' als '${SB_USERNAME}' auf 127.0.0.1:${SB_SERVER_PORT}"
 
