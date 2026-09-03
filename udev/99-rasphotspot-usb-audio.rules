@@ -1,0 +1,4 @@
+# Wird ein USB-Audiointerface angesteckt (oder das MixPre eingeschaltet),
+# startet der SonoBus-Sender neu und findet die Karte damit sofort.
+ACTION=="add", SUBSYSTEM=="sound", KERNEL=="card*", ENV{ID_BUS}=="usb", \
+    TAG+="systemd", RUN+="/bin/systemctl --no-block try-restart sonobus-sender.service"

@@ -1,0 +1,174 @@
+#!/bin/bash
+# -----------------------------------------------------------------------------
+# rasphotspot-audio-setup
+#
+# Erkennt das USB-Audiointerface (Sound Devices MixPre-10T) und schreibt
+#   * /etc/asound.conf              – stabile ALSA-Gerätenamen
+#   * ~sonobus/.config/sonobus/SonoBus.settings – Audiogerät für SonoBus
+#
+# Läuft bei jedem Start von sonobus-sender.service, damit ein Wechsel des
+# Kartenindex (anderer USB-Port, andere Reihenfolge beim Booten) nichts kaputt
+# macht. Muss als root laufen.
+# -----------------------------------------------------------------------------
+set -euo pipefail
+
+LIB_DIR="/usr/local/lib/rasphotspot"
+[ -f "${LIB_DIR}/common.sh" ] || LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)"
+# shellcheck source=../lib/common.sh
+. "${LIB_DIR}/common.sh"
+
+QUIET="no"
+[ "${1:-}" = "--quiet" ] && QUIET="yes"
+say() { [ "$QUIET" = "yes" ] || log "$@"; }
+
+need_root
+load_config
+
+# --- Karte suchen ------------------------------------------------------------
+card_line="$(detect_audio_card "${AUDIO_CARD_MATCH:-}" || true)"
+if [ -z "$card_line" ]; then
+    err "Keine passende Audiokarte gefunden (Suchmuster: '${AUDIO_CARD_MATCH:-}')."
+    err "Verfügbare Karten:"
+    list_audio_cards >&2 || true
+    err "MixPre-10T einschalten, per USB verbinden und im Menü"
+    err "  System > USB > USB Audio  (bzw. 'Audio Interface') aktivieren."
+    exit 1
+fi
+
+CARD_INDEX="$(printf '%s' "$card_line" | cut -f1)"
+CARD_ID="$(printf '%s' "$card_line" | cut -f2)"
+CARD_DESC="$(printf '%s' "$card_line" | cut -f3)"
+
+say "Audiokarte: [${CARD_INDEX}] ${CARD_ID} – ${CARD_DESC}"
+
+# Wieviele Kanäle bietet die Karte tatsächlich an?
+hw_in_channels() {
+    local f="${ASOUND_DIR}/card${CARD_INDEX}/stream0"
+    [ -f "$f" ] || return 1
+    awk '/Capture:/{cap=1} cap && /Channels:/{print $2; exit}' "$f"
+}
+avail_in="$(hw_in_channels 2>/dev/null || true)"
+if [ -n "$avail_in" ] && [ "$avail_in" -gt 0 ] 2>/dev/null; then
+    say "Eingangskanäle der Karte: ${avail_in}"
+    need=$(( SB_INPUT_FIRST_CHANNEL + SB_INPUT_CHANNELS - 1 ))
+    if [ "$need" -gt "$avail_in" ]; then
+        warn "Kanal ${need} angefordert, Karte hat nur ${avail_in} – korrigiere auf Kanal 1-${SB_INPUT_CHANNELS}."
+        SB_INPUT_FIRST_CHANNEL=1
+        if [ "$SB_INPUT_CHANNELS" -gt "$avail_in" ]; then SB_INPUT_CHANNELS="$avail_in"; fi
+    fi
+fi
+
+# --- /etc/asound.conf --------------------------------------------------------
+# JUCE/SonoBus listet ALSA-PCMs über die "hint"-Beschreibung. Indem wir eigene
+# PCMs mit fester Beschreibung anlegen, ist der Gerätename in SonoBus immer
+# derselbe – unabhängig davon, wie die Karte gerade heißt oder nummeriert ist.
+ASOUND="/etc/asound.conf"
+if [ -f "$ASOUND" ] && ! grep -q "RaspHotspot" "$ASOUND"; then
+    cp -a "$ASOUND" "${ASOUND}.vor-rasphotspot"
+    warn "Bestehende ${ASOUND} gesichert als ${ASOUND}.vor-rasphotspot"
+fi
+
+if [ "${AUDIO_PCM_TYPE:-hw}" = "plug" ]; then
+    slave_in="type plug\n    slave.pcm \"hw:CARD=${CARD_ID},DEV=0\""
+    slave_out="$slave_in"
+else
+    slave_in="type hw\n    card \"${CARD_ID}\"\n    device 0"
+    slave_out="$slave_in"
+fi
+
+{
+    echo "# Automatisch erzeugt von rasphotspot-audio-setup – nicht von Hand ändern."
+    echo "# Karte: ${CARD_ID} (${CARD_DESC})"
+    echo ""
+    echo "pcm.rasphotspot_in {"
+    printf '    %b\n' "$slave_in"
+    echo "    hint {"
+    echo "        show on"
+    echo "        description \"RaspHotspot Input\""
+    echo "    }"
+    echo "}"
+    echo ""
+    echo "pcm.rasphotspot_out {"
+    printf '    %b\n' "$slave_out"
+    echo "    hint {"
+    echo "        show on"
+    echo "        description \"RaspHotspot Output\""
+    echo "    }"
+    echo "}"
+    if [ "${AUDIO_SET_DEFAULT:-yes}" = "yes" ]; then
+        echo ""
+        echo "# Damit auch andere Programme (aplay, arecord ...) das Interface nutzen."
+        echo "pcm.!default {"
+        echo "    type plug"
+        echo "    slave.pcm \"hw:CARD=${CARD_ID},DEV=0\""
+        echo "}"
+        echo ""
+        echo "ctl.!default {"
+        echo "    type hw"
+        echo "    card \"${CARD_ID}\""
+        echo "}"
+    fi
+} > "${ASOUND}.tmp"
+mv "${ASOUND}.tmp" "$ASOUND"
+chmod 644 "$ASOUND"
+say "geschrieben: ${ASOUND}"
+
+# --- SonoBus-Einstellungen ---------------------------------------------------
+SB_USER="${SERVICE_USER:-sonobus}"
+SB_HOME="$(getent passwd "$SB_USER" | cut -d: -f6)"
+[ -n "$SB_HOME" ] || die "Benutzer '${SB_USER}' existiert nicht."
+SB_CONF_DIR="${SB_HOME}/.config/sonobus"
+SB_SETTINGS="${SB_CONF_DIR}/SonoBus.settings"
+
+install -d -o "$SB_USER" -g "$SB_USER" -m 755 "${SB_HOME}/.config" "$SB_CONF_DIR"
+
+in_chans="$(channel_bitmask "${SB_INPUT_FIRST_CHANNEL:-1}" "${SB_INPUT_CHANNELS:-2}")"
+if [ "${SB_ENABLE_OUTPUT:-yes}" = "yes" ]; then
+    out_dev="RaspHotspot Output"
+    out_chans="$(channel_bitmask 1 "${SB_OUTPUT_CHANNELS:-2}")"
+    out_attr="audioDeviceOutChans=\"${out_chans}\""
+else
+    out_dev=""
+    out_attr=""
+fi
+
+cat > "${SB_SETTINGS}.tmp" <<XML
+<?xml version="1.0" encoding="UTF-8"?>
+
+<PROPERTIES>
+  <VALUE name="audioSetup">
+    <DEVICESETUP deviceType="ALSA"
+                 audioOutputDeviceName="$(xml_escape "$out_dev")"
+                 audioInputDeviceName="RaspHotspot Input"
+                 audioDeviceRate="${SB_SAMPLE_RATE:-48000}"
+                 audioDeviceBufferSize="${SB_BUFFER_SIZE:-256}"
+                 audioDeviceInChans="${in_chans}"
+                 ${out_attr}/>
+  </VALUE>
+  <VALUE name="shouldOverrideSampleRate" val="1"/>
+  <VALUE name="shouldMuteInput" val="0"/>
+  <VALUE name="shouldCheckForNewVersion" val="0"/>
+</PROPERTIES>
+XML
+mv "${SB_SETTINGS}.tmp" "$SB_SETTINGS"
+chown "$SB_USER":"$SB_USER" "$SB_SETTINGS"
+chmod 644 "$SB_SETTINGS"
+
+# SonoBus legt beim Start eine SENTINEL-Datei an und löscht sie nach
+# erfolgreicher Initialisierung. Bleibt sie liegen (harter Abbruch), würde
+# SonoBus beim nächsten Start unsere Einstellungen wegwerfen.
+rm -f "${SB_CONF_DIR}/SENTINEL"
+
+say "geschrieben: ${SB_SETTINGS}"
+say "  Eingang : Kanal ${SB_INPUT_FIRST_CHANNEL}-$(( SB_INPUT_FIRST_CHANNEL + SB_INPUT_CHANNELS - 1 )) (Maske ${in_chans})"
+say "  Ausgang : ${out_dev:-aus}"
+say "  Rate    : ${SB_SAMPLE_RATE} Hz, Puffer ${SB_BUFFER_SIZE} Samples"
+
+# Für rasphotspot-status merken, was erkannt wurde.
+install -d -m 755 "$STATE_DIR"
+{
+    echo "CARD_INDEX=${CARD_INDEX}"
+    echo "CARD_ID=${CARD_ID}"
+    echo "CARD_DESC=${CARD_DESC}"
+    echo "DETECTED_AT=$(date -Is)"
+} > "${STATE_DIR}/audio.state"

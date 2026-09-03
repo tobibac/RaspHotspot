@@ -1,0 +1,91 @@
+#!/bin/bash
+# Zeigt auf einen Blick, ob Hotspot, Verbindungsserver und Audioweg stehen.
+set -uo pipefail
+
+LIB_DIR="/usr/local/lib/rasphotspot"
+[ -f "${LIB_DIR}/common.sh" ] || LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)"
+# shellcheck source=../lib/common.sh
+. "${LIB_DIR}/common.sh"
+
+load_config
+
+state() {  # state <dienst>
+    if systemctl is-active --quiet "$1" 2>/dev/null; then
+        printf '%s laeuft%s' "$C_GRN" "$C_RST"
+    else
+        printf '%s gestoppt%s' "$C_RED" "$C_RST"
+    fi
+}
+
+log ""
+log "${C_BLD}RaspHotspot – Zustand${C_RST}"
+log ""
+
+# --- WLAN --------------------------------------------------------------------
+log "${C_BLD}WLAN-Hotspot${C_RST}"
+IFACE="$(detect_wifi_iface || echo '?')"
+backend="unbekannt"
+[ -f "${STATE_DIR}/hotspot.state" ] && backend="$(grep -m1 '^BACKEND=' "${STATE_DIR}/hotspot.state" | cut -d= -f2)"
+log "  Backend      : ${backend}"
+log "  Interface    : ${IFACE}"
+log "  SSID         : ${AP_SSID} (offen, ohne Passwort)"
+log "  IP           : ${AP_IP}/${AP_PREFIX}"
+
+if [ "$backend" = "networkmanager" ]; then
+    if nmcli -t -f NAME,DEVICE,STATE connection show --active 2>/dev/null | grep -q "^${AP_CON_NAME}:"; then
+        log "  Profil       : ${C_GRN}aktiv${C_RST} (${AP_CON_NAME})"
+    else
+        log "  Profil       : ${C_RED}nicht aktiv${C_RST} (${AP_CON_NAME})"
+    fi
+else
+    log "  hostapd      : $(state hostapd)"
+    log "  dnsmasq      : $(state dnsmasq)"
+fi
+
+if command -v iw >/dev/null 2>&1 && [ "$IFACE" != "?" ]; then
+    clients="$(iw dev "$IFACE" station dump 2>/dev/null | grep -c '^Station' || echo 0)"
+    log "  Verbunden    : ${clients} Gerät(e)"
+    iw dev "$IFACE" station dump 2>/dev/null | awk '/^Station/ {print "                 " $2}'
+fi
+
+# --- Audio -------------------------------------------------------------------
+log ""
+log "${C_BLD}Audio${C_RST}"
+card_line="$(detect_audio_card "${AUDIO_CARD_MATCH:-}" 2>/dev/null || true)"
+if [ -n "$card_line" ]; then
+    log "  Interface    : ${C_GRN}$(printf '%s' "$card_line" | cut -f2)${C_RST} – $(printf '%s' "$card_line" | cut -f3)"
+    idx="$(printf '%s' "$card_line" | cut -f1)"
+    if [ -f "${ASOUND_DIR}/card${idx}/stream0" ]; then
+        awk '/^(Playback|Capture):/{sect=$1} /Channels:/{if(!seen[sect]++) print "  " sect " Kanäle: " $2}' \
+            "${ASOUND_DIR}/card${idx}/stream0" | sed 's/^/  /'
+    fi
+else
+    log "  Interface    : ${C_RED}nicht gefunden${C_RST} (Suchmuster '${AUDIO_CARD_MATCH}')"
+    log "  Vorhandene Karten:"
+    list_audio_cards | sed 's/^/    /'
+fi
+log "  Gesendet     : Kanal ${SB_INPUT_FIRST_CHANNEL}-$(( SB_INPUT_FIRST_CHANNEL + SB_INPUT_CHANNELS - 1 )), ${SB_SAMPLE_RATE} Hz, Puffer ${SB_BUFFER_SIZE}"
+
+# --- SonoBus -----------------------------------------------------------------
+log ""
+log "${C_BLD}SonoBus${C_RST}"
+log "  aooserver    : $(state aooserver)  (Port ${SB_SERVER_PORT})"
+log "  Sender       : $(state sonobus-sender)"
+log "  Gruppe       : ${SB_GROUP}"
+log "  Link         : $(sonobus_link "${AP_IP}")"
+
+if wait_for_port 127.0.0.1 "${SB_SERVER_PORT}" 1; then
+    log "  Serverport   : ${C_GRN}erreichbar${C_RST}"
+else
+    log "  Serverport   : ${C_RED}nicht erreichbar${C_RST}"
+fi
+
+# Letzte Meldung des Servers über verbundene Gruppen/Nutzer
+if systemctl is-active --quiet aooserver 2>/dev/null; then
+    peers="$(journalctl -u aooserver -n 200 --no-pager 2>/dev/null | grep -iE 'group|client' | tail -3)"
+    [ -n "$peers" ] && { log ""; log "  Letzte Servermeldungen:"; printf '%s\n' "$peers" | sed 's/^/    /'; }
+fi
+
+log ""
+log "Logs:  journalctl -u sonobus-sender -f   |   journalctl -u aooserver -f"
+log ""

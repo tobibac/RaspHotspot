@@ -1,0 +1,19 @@
+Sound Devices MixPre-10T at usb-0000:01:00.0-1.2, high speed : USB Audio
+
+Playback:
+  Status: Stop
+  Interface 1
+    Altset 1
+    Format: S24_3LE
+    Channels: 4
+    Endpoint: 0x01 (1 OUT) (ASYNC)
+    Rates: 48000
+
+Capture:
+  Status: Stop
+  Interface 2
+    Altset 1
+    Format: S24_3LE
+    Channels: 12
+    Endpoint: 0x82 (2 IN) (ASYNC)
+    Rates: 48000

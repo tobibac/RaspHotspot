@@ -1,0 +1,30 @@
+[Unit]
+Description=SonoBus/AOO Verbindungsserver (RaspHotspot)
+Documentation=https://github.com/essej/aooserver
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/rasphotspot/rasphotspot.conf
+User=@SERVICE_USER@
+Group=@SERVICE_USER@
+ExecStart=/usr/local/bin/rasphotspot-aooserver-run
+Restart=always
+RestartSec=3
+
+# Absicherung
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=@LOG_DIR@
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

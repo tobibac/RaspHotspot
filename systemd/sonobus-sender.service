@@ -1,0 +1,31 @@
+[Unit]
+Description=SonoBus Sender: MixPre-10T in die SonoBus-Gruppe
+Documentation=https://sonobus.net
+After=aooserver.service sound.target
+Requires=aooserver.service
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/rasphotspot/rasphotspot.conf
+User=@SERVICE_USER@
+Group=@SERVICE_USER@
+SupplementaryGroups=audio
+Environment=HOME=@SERVICE_HOME@
+WorkingDirectory=@SERVICE_HOME@
+
+# Audiogeraet erkennen und SonoBus-Einstellungen schreiben (braucht root).
+ExecStartPre=+/usr/local/bin/rasphotspot-audio-setup --quiet
+ExecStart=/usr/local/bin/rasphotspot-sonobus-run
+
+Restart=always
+RestartSec=5
+
+# Audio braucht Echtzeitprioritaeten.
+LimitRTPRIO=95
+LimitMEMLOCK=infinity
+Nice=-10
+
+NoNewPrivileges=no
+
+[Install]
+WantedBy=multi-user.target
