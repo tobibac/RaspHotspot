@@ -26,11 +26,12 @@ Alles startet von selbst, sobald der Pi Strom bekommt.
 
 | | |
 |---|---|
-| Raspberry Pi | 4 oder 5 empfohlen (2 GB RAM+). Pi 3B+ funktioniert, baut aber langsamer. |
+| Raspberry Pi | 4 oder 5 empfohlen. Ein Pi 3B geht auch – siehe [Pi 3B](#hinweise-zum-pi-3b) |
 | Betriebssystem | Raspberry Pi OS **Bookworm** (Lite reicht), 64-bit empfohlen |
 | Audio | Sound Devices MixPre-10T (oder ein anderes USB-Audio-Interface) |
-| Karte | ≥ 8 GB, Netzteil mit ordentlich Strom (USB-Audio zieht mit) |
-| Zeit | Der SonoBus-Build dauert auf einem Pi 4 etwa 30–60 Minuten |
+| Karte | ≥ 16 GB (der Build braucht Platz für Quellen und Auslagerungsdatei) |
+| Strom | Ordentliches Netzteil – USB-Audio zieht mit |
+| Zeit | SonoBus bauen: Pi 5 ~20 min, Pi 4 ~30–60 min, Pi 3B mehrere Stunden |
 
 Für die Installation braucht der Pi **einmalig Internet** (LAN-Kabel oder WLAN),
 um die Quellen zu laden und zu bauen. Danach läuft alles offline.
@@ -80,6 +81,49 @@ sudo ./install.sh --force-build                         # Binaries neu bauen
 sudo ./install.sh --skip-hotspot                        # WLAN unangetastet lassen
 sudo ./install.sh --reset-config                        # Konfiguration neu anlegen
 ```
+
+### Abkürzung: fertiges Paket statt Selbstbau
+
+Der SonoBus-Build ist der langsame Teil. Auf [sonobus.net/linux.html](https://sonobus.net/linux.html)
+gibt es fertige Debian-Pakete – passt eines zur Architektur des Pi
+(`dpkg --print-architecture`), spart das viel Zeit:
+
+```bash
+sudo ./install.sh --sonobus-deb https://…/sonobus_….deb   # URL oder lokale Datei
+```
+
+Der Installer nimmt dann das Paket, baut nur noch den kleinen `aooserver`
+selbst und findet `sonobus` anschließend über den `PATH` – egal ob es in
+`/usr/bin` (Paket) oder `/usr/local/bin` (Selbstbau) liegt.
+
+---
+
+## Hinweise zum Pi 3B
+
+Ein Pi 3B reicht für den Betrieb, hat aber drei Eigenheiten:
+
+**Bauen dauert.** 1 GB RAM, und JUCE braucht beim Übersetzen einzelner Dateien
+über ein Gigabyte. Der Installer legt darum automatisch eine Auslagerungsdatei
+an (und entfernt sie hinterher wieder) und baut mit nur einem Job. Das
+funktioniert, dauert aber **mehrere Stunden** – am besten über Nacht laufen
+lassen, oder die Abkürzung über das fertige Paket nehmen.
+
+**Nur 2,4 GHz.** Das WLAN-Modul des 3B kann kein 5 GHz (erst der 3B+ kann das).
+Die Installation merkt das selbst und schaltet auf 2,4 GHz um – in der Ausgabe
+steht dann „5-GHz-Kanal 36 nicht nutzbar". Nichts zu tun, aber es heißt: weniger
+Bandbreite und mehr Störungen durch Nachbar-WLANs.
+
+**Zuhörerzahl im Blick behalten.** SonoBus schickt jedem Teilnehmer seinen
+eigenen Datenstrom. Unkomprimiert (`pcm16`) sind das rund 1,5 Mbit/s pro
+Zuhörer – auf 2,4 GHz sind damit etwa eine Handvoll Geräte realistisch. Wenn es
+mehr werden sollen oder es hakt:
+
+```ini
+SB_SEND_FORMAT="opus96"     # ~0,2 Mbit/s pro Zuhörer, kostet ~2,5 ms
+```
+
+danach `sudo systemctl restart sonobus-sender`. Der Unterschied in der Latenz
+ist klein, der in der Funklast riesig.
 
 ---
 
@@ -361,15 +405,31 @@ sudo apt install libjack-jackd2-dev
 Auf Desktop-Images kann apt dabei `pipewire-jack` ersetzen wollen. Auf einem
 Lite-Image (Empfehlung für diese Basisstation) ist das kein Thema.
 
-**Bauen schlägt fehl (Speicher)**
+**Bauen bricht ab mit `Killed signal terminated program cc1plus`**
 
-Swap vergrößern und neu bauen:
+Das ist der Kernel, der dem Compiler den Speicher entzieht. Auslöser ist
+JUCEs Hilfsprogramm `juceaide`: JUCE baut es fest als Debug-Version, und die
+Sammeldatei `juce_gui_basics.cpp` braucht dabei über ein Gigabyte.
+
+Der Installer legt inzwischen selbst eine Auslagerungsdatei an
+(`/var/cache/rasphotspot-build-swap`), bis RAM + Swap zusammen 4 GB ergeben,
+und räumt sie nach dem Build wieder weg. Einfach nochmal starten:
 
 ```bash
-sudo sed -i 's/^CONF_SWAPSIZE=.*/CONF_SWAPSIZE=2048/' /etc/dphys-swapfile
-sudo systemctl restart dphys-swapfile
-sudo ./install.sh --force-build
+sudo ./install.sh
 ```
+
+Meldet er zu wenig Plattenplatz, entweder aufräumen (`sudo apt clean`) oder den
+Swap dauerhaft vergrößern:
+
+```bash
+sudo dphys-swapfile swapoff
+sudo sed -i 's/^CONF_SWAPSIZE=.*/CONF_SWAPSIZE=2048/' /etc/dphys-swapfile
+sudo dphys-swapfile setup && sudo dphys-swapfile swapon
+```
+
+Wer nicht warten will, nimmt das fertige Paket:
+`sudo ./install.sh --sonobus-deb <URL oder Datei>`.
 
 ---
 
@@ -385,6 +445,7 @@ sudo ./install.sh --force-build
 | `/usr/local/bin/rasphotspot-*` | Hilfsskripte (Status, Audio-Setup, Starter, Portal) |
 | `/usr/local/share/rasphotspot/portal.html` | die Begrüßungsseite |
 | `/usr/local/src/rasphotspot/` | Quellen für spätere Neubauten |
+| `/var/cache/rasphotspot-build-swap` | Auslagerungsdatei, nur während des Builds |
 | `/var/log/rasphotspot/` | Logdateien des Verbindungsservers |
 
 ### Die Dienste

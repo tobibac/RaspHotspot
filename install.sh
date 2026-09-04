@@ -16,6 +16,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
 . "${HERE}/lib/common.sh"
 
+SONOBUS_DEB=""
 SKIP_BUILD="no"
 SKIP_HOTSPOT="no"
 FORCE_BUILD="no"
@@ -35,6 +36,9 @@ Optionen:
   --ssid NAME        Name des offenen WLANs (Standard: ArizonaArizona)
   --config DATEI     zusätzliche Konfigurationsdatei einlesen
   --reset-config     vorhandene /etc/rasphotspot/rasphotspot.conf überschreiben
+  --sonobus-deb Q    fertiges SonoBus-Paket statt Selbstbau (Datei oder URL).
+                     Spart auf langsamen Pis Stunden – Pakete gibt es auf
+                     sonobus.net/linux.html
   --skip-build       aooserver/SonoBus nicht neu bauen (nutzt vorhandene Binaries)
   --force-build      auch dann bauen, wenn die Binaries schon existieren
   --skip-hotspot     WLAN-Hotspot nicht anfassen
@@ -52,6 +56,7 @@ while [ $# -gt 0 ]; do
         --ssid)         CLI_SSID="${2:-}"; shift 2 ;;
         --config)       EXTRA_CONFIG="${2:-}"; shift 2 ;;
         --reset-config) KEEP_CONFIG="no"; shift ;;
+        --sonobus-deb)  SONOBUS_DEB="${2:-}"; shift 2 ;;
         --skip-build)   SKIP_BUILD="yes"; shift ;;
         --force-build)  FORCE_BUILD="yes"; shift ;;
         --skip-hotspot) SKIP_HOTSPOT="yes"; shift ;;
@@ -187,24 +192,42 @@ step "5/8  aooserver und SonoBus bauen"
 # =============================================================================
 if [ "$SKIP_BUILD" = "yes" ]; then
     warn "Build übersprungen (--skip-build)"
-    [ -x "${PREFIX}/bin/aooserver" ] || die "aooserver fehlt – ohne --skip-build installieren."
-    [ -x "${PREFIX}/bin/sonobus" ]   || die "sonobus fehlt – ohne --skip-build installieren."
+    command -v aooserver >/dev/null 2>&1 || die "aooserver fehlt – ohne --skip-build installieren."
+    command -v sonobus   >/dev/null 2>&1 || die "sonobus fehlt – ohne --skip-build installieren."
 else
     if [ -x "${PREFIX}/bin/aooserver" ] && [ "$FORCE_BUILD" = "no" ]; then
         ok "aooserver ist bereits installiert (--force-build erzwingt Neubau)"
     else
         "${HERE}/scripts/build-aooserver.sh"
     fi
-    if [ -x "${PREFIX}/bin/sonobus" ] && [ "$FORCE_BUILD" = "no" ]; then
+    if [ -n "$SONOBUS_DEB" ]; then
+        info "Installiere SonoBus aus dem Paket ${SONOBUS_DEB}"
+        deb_file="$SONOBUS_DEB"
+        if [[ "$SONOBUS_DEB" =~ ^https?:// ]]; then
+            deb_file="$(mktemp -d)/sonobus.deb"
+            curl -fL --progress-bar -o "$deb_file" "$SONOBUS_DEB" \
+                || die "Download fehlgeschlagen: ${SONOBUS_DEB}"
+        fi
+        [ -f "$deb_file" ] || die "Paketdatei nicht gefunden: ${deb_file}"
+        DEBIAN_FRONTEND=noninteractive apt-get install -y "$deb_file" \
+            || die "Paket ließ sich nicht installieren."
+        command -v sonobus >/dev/null 2>&1 \
+            || die "Nach der Paketinstallation ist kein 'sonobus' im PATH."
+        ok "SonoBus aus Paket installiert: $(command -v sonobus)"
+    elif [ -x "${PREFIX}/bin/sonobus" ] && [ "$FORCE_BUILD" = "no" ]; then
         ok "sonobus ist bereits installiert (--force-build erzwingt Neubau)"
+    elif command -v sonobus >/dev/null 2>&1 && [ "$FORCE_BUILD" = "no" ]; then
+        ok "sonobus ist bereits vorhanden ($(command -v sonobus))"
     else
         info "Jetzt wird SonoBus gebaut. Das dauert – Zeit für einen Kaffee."
+        info "Reicht der Arbeitsspeicher nicht, wird für den Build automatisch"
+        info "eine Auslagerungsdatei angelegt und hinterher wieder entfernt."
         "${HERE}/scripts/build-sonobus.sh"
     fi
 fi
 
 # Kennt das gebaute SonoBus den Headless-Modus? (rein informativ)
-sb_help="$(timeout 30 "${PREFIX}/bin/sonobus" --help 2>&1 || true)"
+sb_help="$(timeout 30 "$(command -v sonobus || echo "${PREFIX}/bin/sonobus")" --help 2>&1 || true)"
 if ! printf '%s' "$sb_help" | grep -q -- "--headless"; then
     warn "Konnte den Headless-Modus nicht bestaetigen (sonobus --help ohne Ergebnis)."
     warn "Falls sonobus-sender nicht startet: SB_USE_XVFB=\"yes\" in ${CONF_FILE} setzen."

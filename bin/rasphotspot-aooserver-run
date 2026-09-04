@@ -18,5 +18,8 @@ if [ -n "${SB_SERVER_LOGDIR:-}" ] && [ -w "${SB_SERVER_LOGDIR}" ]; then
     args+=("--logdir=${SB_SERVER_LOGDIR}")
 fi
 
+AOOSERVER_BIN="$(command -v aooserver 2>/dev/null || true)"
+[ -n "$AOOSERVER_BIN" ] || AOOSERVER_BIN="/usr/local/bin/aooserver"
+
 log "aooserver auf Port ${SB_SERVER_PORT:-10998} (Gruppe: ${SB_GROUP})"
-exec /usr/local/bin/aooserver "${args[@]}"
+exec "$AOOSERVER_BIN" "${args[@]}"

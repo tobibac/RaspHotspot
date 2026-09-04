@@ -190,13 +190,109 @@ render_config() {
     chmod 644 "$target"
 }
 
+# --- Speicher für den Build -------------------------------------------------
+# JUCE baut sein Hilfsprogramm juceaide als Debug-Build (das schreibt JUCE
+# selbst so vor, Flags von außen greifen dort nicht). Die große Sammeldatei
+# juce_gui_basics.cpp braucht dabei deutlich über ein Gigabyte – auf einem Pi
+# mit 1–2 GB RAM killt der Kernel den Compiler:
+#   "c++: fatal error: Killed signal terminated program cc1plus"
+# Dagegen hilft nur mehr Speicher. Wir legen für die Dauer des Builds eine
+# Auslagerungsdatei an und räumen sie hinterher wieder weg.
+
+BUILD_SWAPFILE="/var/cache/rasphotspot-build-swap"
+
+ram_mb()  { awk '/^MemTotal:/  { printf "%d", $2 / 1024 }' /proc/meminfo; }
+swap_mb() { awk '/^SwapTotal:/ { printf "%d", $2 / 1024 }' /proc/meminfo; }
+
+# Wieviel Auslagerungsdatei fehlt noch? (vorhanden, gewünscht) -> MB, 0 = genug.
+# Wird auf volle 256 MB aufgerundet, Minimum 512 MB.
+swap_needed_mb() {
+    local have="$1" want="$2" missing
+    if [ "$have" -ge "$want" ]; then printf '0'; return 0; fi
+    missing=$(( want - have ))
+    missing=$(( (missing + 255) / 256 * 256 ))
+    [ "$missing" -lt 512 ] && missing=512
+    printf '%s' "$missing"
+}
+
+# Freier Platz in MB auf dem Dateisystem, auf dem ein Pfad liegt.
+free_disk_mb() {
+    df -Pm "$1" 2>/dev/null | awk 'NR == 2 { print $4 }'
+}
+
+# Sorgt dafür, dass RAM + Swap mindestens <want_mb> ergeben.
+ensure_build_memory() {
+    local want="${1:-4096}" have need free
+    have=$(( $(ram_mb) + $(swap_mb) ))
+    info "Speicher: $(ram_mb) MB RAM + $(swap_mb) MB Swap = ${have} MB"
+
+    need="$(swap_needed_mb "$have" "$want")"
+    if [ "$need" = "0" ]; then
+        ok "Genug Speicher für den Build"
+        return 0
+    fi
+
+    if [ -e "$BUILD_SWAPFILE" ]; then
+        warn "Alte Auslagerungsdatei ${BUILD_SWAPFILE} gefunden – räume sie weg."
+        swapoff "$BUILD_SWAPFILE" 2>/dev/null || true
+        rm -f "$BUILD_SWAPFILE"
+    fi
+
+    install -d -m 755 "$(dirname "$BUILD_SWAPFILE")"
+    free="$(free_disk_mb "$(dirname "$BUILD_SWAPFILE")")"
+    if [ -n "$free" ] && [ "$free" -lt $(( need + 1024 )) ]; then
+        err "Zu wenig Platz: ${need} MB Auslagerungsdatei gewünscht, nur ${free} MB frei."
+        err "Platz schaffen (z. B. 'sudo apt clean') oder Swap von Hand vergrößern:"
+        err "  sudo dphys-swapfile swapoff"
+        err "  sudo sed -i 's/^CONF_SWAPSIZE=.*/CONF_SWAPSIZE=2048/' /etc/dphys-swapfile"
+        err "  sudo dphys-swapfile setup && sudo dphys-swapfile swapon"
+        return 1
+    fi
+
+    info "Lege ${need} MB Auslagerungsdatei an (${BUILD_SWAPFILE}) – nur für den Build"
+    if ! fallocate -l "${need}M" "$BUILD_SWAPFILE" 2>/dev/null; then
+        dd if=/dev/zero of="$BUILD_SWAPFILE" bs=1M count="$need" status=none || {
+            err "Konnte ${BUILD_SWAPFILE} nicht anlegen."
+            return 1
+        }
+    fi
+    chmod 600 "$BUILD_SWAPFILE"
+
+    if ! mkswap "$BUILD_SWAPFILE" >/dev/null 2>&1 || ! swapon "$BUILD_SWAPFILE" 2>/dev/null; then
+        rm -f "$BUILD_SWAPFILE"
+        err "Auslagerungsdatei ließ sich nicht aktivieren (Dateisystem unterstützt das nicht?)."
+        err "Bitte den Swap von Hand vergrößern:"
+        err "  sudo dphys-swapfile swapoff"
+        err "  sudo sed -i 's/^CONF_SWAPSIZE=.*/CONF_SWAPSIZE=2048/' /etc/dphys-swapfile"
+        err "  sudo dphys-swapfile setup && sudo dphys-swapfile swapon"
+        return 1
+    fi
+
+    ok "Jetzt $(( $(ram_mb) + $(swap_mb) )) MB Speicher verfügbar"
+    warn "Auslagern auf SD-Karte ist langsam – der Build dauert dadurch länger."
+    return 0
+}
+
+# Auslagerungsdatei wieder abbauen (per trap am Ende des Builds).
+release_build_memory() {
+    if [ -e "$BUILD_SWAPFILE" ]; then
+        swapoff "$BUILD_SWAPFILE" 2>/dev/null || true
+        rm -f "$BUILD_SWAPFILE"
+        info "Auslagerungsdatei wieder entfernt"
+    fi
+}
+
 # --- Diverses --------------------------------------------------------------
-# Sinnvolle Anzahl paralleler Compiler-Jobs (RAM-begrenzt, ~1 GB pro Job).
+# Sinnvolle Anzahl paralleler Compiler-Jobs.
+# Die Sammeldateien von JUCE brauchen beim Übersetzen gut 1,5 GB pro Job –
+# deshalb richtet sich die Parallelität nach dem echten RAM, nicht nach der
+# Kernzahl. Die Auslagerungsdatei ist Reserve für Spitzen, keine Grundlage für
+# mehr Jobs: Auslagern auf SD-Karte ist um Größenordnungen langsamer.
 build_jobs() {
-    local cpus mem_kb by_mem
+    local cpus mem_mb by_mem
     cpus="$(nproc 2>/dev/null || echo 2)"
-    mem_kb="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 1048576)"
-    by_mem=$(( mem_kb / 1024 / 1024 ))
+    mem_mb="$(ram_mb)"
+    by_mem=$(( mem_mb / 1500 ))
     [ "$by_mem" -lt 1 ] && by_mem=1
     if [ "$by_mem" -lt "$cpus" ]; then printf '%s' "$by_mem"; else printf '%s' "$cpus"; fi
 }

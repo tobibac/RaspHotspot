@@ -16,6 +16,13 @@ JOBS="$(build_jobs)"
 
 install -d "$SRC_DIR"
 
+# --- Vorflug: genug Speicher? -----------------------------------------------
+# Das muss vor dem Klonen passieren, damit ein Abbruch nicht erst nach 400 MB
+# Download kommt.
+ensure_build_memory "${BUILD_MEMORY_MB:-4096}" || \
+    die "Zu wenig Speicher für den SonoBus-Build – siehe Hinweise oben."
+trap release_build_memory EXIT INT TERM
+
 if [ -d "${DIR}/.git" ]; then
     info "Aktualisiere Quellen in ${DIR}"
     git -C "$DIR" fetch --depth 1 origin "${SONOBUS_GIT_REF:-HEAD}"
@@ -30,24 +37,34 @@ else
     fi
 fi
 
-# Wenig RAM? Ohne Swap bricht der Compiler gerne mit "internal compiler error" ab.
-mem_mb=$(( $(awk '/^MemTotal:/ {print $2}' /proc/meminfo) / 1024 ))
-swap_mb=$(( $(awk '/^SwapTotal:/ {print $2}' /proc/meminfo) / 1024 ))
-if [ "$mem_mb" -lt 1800 ] && [ "$swap_mb" -lt 900 ]; then
-    warn "Nur ${mem_mb} MB RAM und ${swap_mb} MB Swap – der Build kann scheitern."
-    warn "Empfehlung: Swap vergrößern (/etc/dphys-swapfile: CONF_SWAPSIZE=2048,"
-    warn "danach 'sudo systemctl restart dphys-swapfile')."
-fi
+# Den Speicherhunger von GCC etwas zügeln. Das wirkt auch im
+# juceaide-Unterbau, weil CMake beim ersten Konfigurieren CXXFLAGS aus der
+# Umgebung übernimmt – Flags über die Kommandozeile kommen dort nicht an.
+export CXXFLAGS="${CXXFLAGS:-} --param ggc-min-expand=10 --param ggc-min-heapsize=32768"
+export CFLAGS="${CFLAGS:-} --param ggc-min-expand=10 --param ggc-min-heapsize=32768"
 
-# SonoBus baut mit JUCE_JACK=1 – ohne diese Header bricht der Build mittendrin ab.
-if [ ! -f /usr/include/jack/jack.h ] && ! compgen -G "/usr/include/*/jack/jack.h" >/dev/null; then
-    die "jack/jack.h fehlt – bitte 'sudo apt install libjack-jackd2-dev' ausführen."
+# Ein abgebrochenes "cmake" hinterlässt einen Cache, aber kein Makefile – und
+# dieser halbe Cache übernimmt unsere Umgebung nicht mehr. Dann lieber neu
+# anfangen. Bereits übersetzte Dateien (Makefile vorhanden) bleiben natürlich
+# liegen, damit ein unterbrochener Build weiterlaufen kann statt von vorn.
+if [ -f "${DIR}/build/CMakeCache.txt" ] && [ ! -f "${DIR}/build/Makefile" ]; then
+    warn "Abgebrochenes cmake gefunden – räume ${DIR}/build und fange neu an."
+    rm -rf "${DIR}/build"
 fi
 
 info "Konfiguriere Build (cmake)"
-cmake -DCMAKE_BUILD_TYPE=Release -B "${DIR}/build" -S "$DIR"
+if ! cmake -DCMAKE_BUILD_TYPE=Release -B "${DIR}/build" -S "$DIR"; then
+    warn "cmake ist gescheitert – versuche es einmal mit leerem Build-Verzeichnis."
+    rm -rf "${DIR}/build"
+    cmake -DCMAKE_BUILD_TYPE=Release -B "${DIR}/build" -S "$DIR"
+fi
 
-info "Baue SonoBus mit ${JOBS} Job(s) – auf einem Pi 4 typischerweise 30-60 Minuten"
+if [ "$(ram_mb)" -lt 1500 ]; then
+    info "Baue SonoBus mit ${JOBS} Job(s) – mit nur $(ram_mb) MB RAM dauert das"
+    info "mehrere Stunden. Am besten über Nacht laufen lassen (oder --sonobus-deb)."
+else
+    info "Baue SonoBus mit ${JOBS} Job(s) – auf einem Pi typischerweise 30-90 Minuten"
+fi
 cmake --build "${DIR}/build" --target SonoBus_Standalone --config Release -j "$JOBS"
 
 BIN="${DIR}/build/SonoBus_artefacts/Release/Standalone/sonobus"

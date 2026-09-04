@@ -186,6 +186,18 @@ rm -f "$portal_conf"
 
 echo "Build-Parallelität"
 check "mindestens 1 Job" "$([ "$(build_jobs)" -ge 1 ] && echo ja)" "ja"
+check "nie mehr Jobs als Kerne" \
+      "$([ "$(build_jobs)" -le "$(nproc)" ] && echo ja)" "ja"
+
+echo "Speicher für den Build"
+check "2 GB Pi braucht Auslagerungsdatei" "$(swap_needed_mb 1948 4096)" "2304"
+check "genug Speicher -> nichts anlegen"  "$(swap_needed_mb 8192 4096)" "0"
+check "knapp darunter -> Mindestgröße"    "$(swap_needed_mb 4000 4096)" "512"
+check "1 GB Pi ohne Swap"                 "$(swap_needed_mb 950 4096)"  "3328"
+check "auf 256 MB aufgerundet" \
+      "$(( $(swap_needed_mb 1900 4096) % 256 ))" "0"
+check "freier Platz wird ermittelt" \
+      "$([ "$(free_disk_mb /)" -gt 0 ] 2>/dev/null && echo ja)" "ja"
 
 echo ""
 if [ "$fails" -eq 0 ]; then

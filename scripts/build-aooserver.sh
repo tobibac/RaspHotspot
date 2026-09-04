@@ -16,6 +16,12 @@ JOBS="$(build_jobs)"
 
 install -d "$SRC_DIR"
 
+# aooserver ist deutlich genügsamer als SonoBus, aber auf einem 1-GB-Pi wird
+# es auch hier knapp.
+ensure_build_memory "${BUILD_MEMORY_MB_AOOSERVER:-2048}" || \
+    die "Zu wenig Speicher für den aooserver-Build – siehe Hinweise oben."
+trap release_build_memory EXIT INT TERM
+
 if [ -d "${DIR}/.git" ]; then
     info "Aktualisiere Quellen in ${DIR}"
     git -C "$DIR" fetch --depth 1 origin "${AOOSERVER_GIT_REF:-HEAD}"

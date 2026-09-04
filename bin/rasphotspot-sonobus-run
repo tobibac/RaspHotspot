@@ -43,8 +43,12 @@ args=(
 
 log "SonoBus: Gruppe '${SB_GROUP}' als '${SB_USERNAME}' auf 127.0.0.1:${SB_SERVER_PORT}"
 
+# Selbst gebaut liegt sonobus in /usr/local/bin, aus einem Paket in /usr/bin.
+SONOBUS_BIN="$(command -v sonobus 2>/dev/null || true)"
+[ -n "$SONOBUS_BIN" ] || SONOBUS_BIN="/usr/local/bin/sonobus"
+
 if [ "${SB_USE_XVFB:-no}" = "yes" ] && command -v xvfb-run >/dev/null 2>&1; then
-    exec xvfb-run -a /usr/local/bin/sonobus "${args[@]}"
+    exec xvfb-run -a "$SONOBUS_BIN" "${args[@]}"
 fi
 
-exec /usr/local/bin/sonobus "${args[@]}"
+exec "$SONOBUS_BIN" "${args[@]}"
