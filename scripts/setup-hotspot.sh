@@ -62,6 +62,17 @@ if [ "${PORTAL_ENABLE:-yes}" = "yes" ] && [ "${AP_OFFER_GATEWAY}" != "yes" ]; th
     AP_OFFER_GATEWAY="yes"
 fi
 
+# Warnung, wenn jemand das Skript von Hand über genau die WLAN-Verbindung
+# aufruft, die gleich zum Access Point wird. Nur im Terminal – wenn die
+# Einstellungsseite das Skript anstößt, läuft es ohnehin losgelöst.
+if [ -t 1 ] && ssh_over_iface "$IFACE"; then
+    warn "Deine SSH-Verbindung läuft über ${IFACE} und bricht gleich ab."
+    warn "Der Hotspot wird trotzdem fertig eingerichtet."
+    log  "  Zurück:  WLAN '${AP_SSID}' verbinden, dann  ssh ${SUDO_USER:-pi}@${AP_IP}"
+    log  "  Sicherer wäre:  sudo systemd-run --unit=hotspot --collect $0"
+    sleep 5
+fi
+
 install -d -m 755 "$STATE_DIR"
 
 # =============================================================================

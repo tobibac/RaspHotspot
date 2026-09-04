@@ -170,7 +170,10 @@ ADMIN_PASSWORD_NEW=""
 if [ "${ADMIN_ENABLE:-yes}" = "yes" ] && [ ! -f "${CONF_DIR}/admin.secret" ]; then
     ADMIN_PASSWORD_NEW="$(RASPHOTSPOT_SERVICE_USER="${SERVICE_USER}" \
         "${HERE}/bin/rasphotspot-admin-password" --random | sed 's/.*: //')"
-    ok "Passwort für die Einstellungsseite erzeugt"
+    log ""
+    log "  ${C_BLD}Passwort für die Einstellungsseite: ${ADMIN_PASSWORD_NEW}${C_RST}"
+    log "  ${C_YEL}Jetzt notieren.${C_RST} Neues setzen: sudo rasphotspot-admin-password"
+    log ""
 fi
 
 ok "Verzeichnisse angelegt"
@@ -346,16 +349,7 @@ if [ "${PORTAL_ENABLE:-yes}" != "yes" ]; then
 fi
 
 # =============================================================================
-step "7/8  WLAN-Hotspot einrichten"
-# =============================================================================
-if [ "$SKIP_HOTSPOT" = "yes" ]; then
-    warn "Hotspot übersprungen (--skip-hotspot)"
-else
-    "${HERE}/scripts/setup-hotspot.sh"
-fi
-
-# =============================================================================
-step "8/8  Dienste starten"
+step "7/8  Dienste starten"
 # =============================================================================
 systemctl restart aooserver.service
 ok "aooserver gestartet"
@@ -405,7 +399,7 @@ ${SB_INPUT_FIRST_CHANNEL}-$(( SB_INPUT_FIRST_CHANNEL + SB_INPUT_CHANNELS - 1 )) 
 INFO
 
 log ""
-log "${C_GRN}${C_BLD}Fertig.${C_RST}"
+log "${C_BLD}Das ist eingerichtet:${C_RST}"
 log ""
 if [ -n "${AP_PASSWORD:-}" ]; then
 log "  WLAN            : ${C_BLD}${AP_SSID}${C_RST} (WPA2, Passwort gesetzt)"
@@ -429,7 +423,65 @@ log ""
 log "  Zustand prüfen  : rasphotspot-status"
 log "  Diese Infos     : ${CONF_DIR}/connect-info.txt"
 log ""
+# =============================================================================
+step "8/8  WLAN-Hotspot einrichten"
+# =============================================================================
+# Ganz zum Schluss, und zwar mit Absicht: Sobald das WLAN-Modul vom Client- in
+# den Access-Point-Betrieb wechselt, bricht jede SSH-Verbindung ab, die über
+# genau dieses WLAN läuft. Alles Wichtige ist bis hierher erledigt und
+# ausgegeben; der Hotspot selbst wird zusätzlich losgelöst von dieser Sitzung
+# gestartet, damit er auch dann fertig wird, wenn die Verbindung wegbricht.
+if [ "$SKIP_HOTSPOT" = "yes" ]; then
+    warn "Hotspot übersprungen (--skip-hotspot)"
+    log "  Später nachholen mit: sudo rasphotspot-setup-hotspot"
+else
+    HOTSPOT_IFACE="$(detect_wifi_iface || true)"
+    RISKY="no"
+    if [ -n "$HOTSPOT_IFACE" ] && ssh_over_iface "$HOTSPOT_IFACE"; then
+        RISKY="yes"
+        log ""
+        warn "Du bist über ${HOTSPOT_IFACE} per SSH verbunden – genau dieses"
+        warn "Interface wird jetzt zum Access Point. Deine Verbindung bricht"
+        warn "dabei ab. Das ist normal und kein Fehler:"
+        log  "    • Der Hotspot läuft danach trotzdem weiter."
+        log  "    • Zurück kommst du über das WLAN '${AP_SSID}' und"
+        log  "      dann  ssh ${SUDO_USER:-pi}@${AP_IP}"
+        log  "    • Oder per LAN-Kabel bzw. Bildschirm und Tastatur."
+        log ""
+        info "Weiter in 8 Sekunden – mit Strg+C abbrechen (Hotspot dann später"
+        info "mit 'sudo rasphotspot-setup-hotspot' einrichten)."
+        sleep 8
+    fi
+
+    if [ "$RISKY" = "yes" ] && command -v systemd-run >/dev/null 2>&1; then
+        # Losgelöst von dieser Sitzung starten, damit ein Verbindungsabbruch
+        # die Einrichtung nicht mittendrin abwürgt.
+        systemctl reset-failed rasphotspot-hotspot-setup.service 2>/dev/null || true
+        systemd-run --unit=rasphotspot-hotspot-setup --collect --quiet \
+            "${PREFIX}/bin/rasphotspot-setup-hotspot"
+        info "Einrichtung läuft im Hintergrund (rasphotspot-hotspot-setup)."
+
+        for _ in $(seq 1 60); do
+            systemctl is-active --quiet rasphotspot-hotspot-setup.service || break
+            sleep 1
+        done
+
+        if systemctl is-failed --quiet rasphotspot-hotspot-setup.service; then
+            err "Hotspot-Einrichtung fehlgeschlagen:"
+            journalctl -u rasphotspot-hotspot-setup -n 20 --no-pager 2>/dev/null | sed 's/^/    /'
+        else
+            ok "Hotspot '${AP_SSID}' eingerichtet"
+        fi
+    else
+        "${PREFIX}/bin/rasphotspot-setup-hotspot"
+    fi
+fi
+
+log ""
+log "${C_GRN}${C_BLD}Fertig.${C_RST}"
+log ""
 log "  Am MixPre-10T muss USB-Audio aktiv sein (Menü: System > USB > Audio Interface)."
+log "  Zurück auf den Pi kommst du über das WLAN '${AP_SSID}': ssh ${SUDO_USER:-pi}@${AP_IP}"
 log "  Alles startet ab jetzt automatisch, sobald der Pi Strom bekommt."
 log "  Zum Prüfen einmal neu starten: sudo reboot"
 log ""

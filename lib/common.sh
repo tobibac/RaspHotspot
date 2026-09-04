@@ -91,6 +91,21 @@ wifi_supports_5ghz() {
     return 0
 }
 
+# Läuft die aktuelle SSH-Sitzung über dieses Interface? Wenn ja, bricht sie
+# ab, sobald daraus ein Access Point wird.
+ssh_over_iface() {
+    local iface="$1" addr
+    command -v ss >/dev/null 2>&1 || return 1
+    while read -r addr; do
+        [ -n "$addr" ] || continue
+        if ss -tn state established 2>/dev/null \
+             | awk '{print $3}' | grep -q "^${addr}:22$"; then
+            return 0
+        fi
+    done < <(ip -4 -o addr show dev "$iface" 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
+    return 1
+}
+
 # --- Audio -----------------------------------------------------------------
 # Sucht die Soundkarte und gibt "index<TAB>id<TAB>beschreibung" zurück.
 # 1. nach AUDIO_CARD_MATCH, 2. erste USB-Karte mit Aufnahme-Gerät.

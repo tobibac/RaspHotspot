@@ -249,6 +249,31 @@ check "mindestens 1 Job" "$([ "$(build_jobs)" -ge 1 ] && echo ja)" "ja"
 check "nie mehr Jobs als Kerne" \
       "$([ "$(build_jobs)" -le "$(nproc)" ] && echo ja)" "ja"
 
+echo "Erkennung: läuft SSH über das WLAN, das gleich Access Point wird?"
+stub="$(mktemp -d)"
+cat > "${stub}/ip" <<'STUBEOF'
+#!/bin/bash
+case "$*" in
+  *wlan0*) echo '3: wlan0    inet 192.168.178.42/24 brd 192.168.178.255 scope global dynamic wlan0' ;;
+  *eth0*)  echo '2: eth0    inet 10.0.0.5/24 brd 10.0.0.255 scope global dynamic eth0' ;;
+esac
+STUBEOF
+cat > "${stub}/ss" <<'STUBEOF'
+#!/bin/bash
+echo "Recv-Q Send-Q Local Address:Port  Peer Address:Port Process"
+echo "0      0      192.168.178.42:22   192.168.178.30:52134"
+STUBEOF
+chmod +x "${stub}/ip" "${stub}/ss"
+check "SSH über das WLAN wird erkannt" \
+      "$(PATH="${stub}:$PATH" bash -c ". '${ROOT}/lib/common.sh'; ssh_over_iface wlan0 && echo ja || echo nein")" "ja"
+check "unbeteiligtes Interface löst nichts aus" \
+      "$(PATH="${stub}:$PATH" bash -c ". '${ROOT}/lib/common.sh'; ssh_over_iface eth0 && echo ja || echo nein")" "nein"
+empty="$(mktemp -d)"
+check "ohne ip/ss keine Fehlalarme" \
+      "$(PATH="$empty" "$(command -v bash)" -c ". '${ROOT}/lib/common.sh'; ssh_over_iface wlan0 && echo ja || echo nein")" "nein"
+rmdir "$empty"
+rm -rf "$stub"
+
 echo "Speicher für den Build"
 check "2 GB Pi braucht Auslagerungsdatei" "$(swap_needed_mb 1948 4096)" "2304"
 check "genug Speicher -> nichts anlegen"  "$(swap_needed_mb 8192 4096)" "0"

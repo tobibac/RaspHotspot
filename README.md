@@ -63,8 +63,16 @@ Das Skript erledigt der Reihe nach:
    dann dauert es deutlich länger.
 6. systemd-Dienste einrichten und für den Autostart aktivieren
    (`aooserver`, `sonobus-sender`, `rasphotspot-portal`)
-7. Den offenen Hotspot samt Begrüßungsseite einrichten
-8. Alles starten
+7. Alles starten und die Zugangsdaten ausgeben
+8. Zum Schluss den Hotspot einrichten
+
+> **Wenn du per SSH über WLAN auf dem Pi bist:** Im letzten Schritt wird genau
+> dieses WLAN-Modul zum Access Point – deine Verbindung bricht dabei ab. Das ist
+> normal. Der Installer erkennt die Situation, warnt vorher und startet die
+> Einrichtung losgelöst von deiner Sitzung, damit sie trotzdem fertig wird.
+> Alles Wichtige (auch das Passwort für die Einstellungsseite) steht schon
+> vorher auf dem Bildschirm. Zurück kommst du über das neue WLAN:
+> `ssh pi@10.42.0.1` – oder gleich per LAN-Kabel installieren.
 
 Danach einmal neu starten:
 
@@ -466,6 +474,19 @@ bleibt der Vorschlag in `/var/lib/rasphotspot/staged.json` liegen. Anwerfen mit
 Captive-Portal-Browser sind eingeschränkt. Dann die Seite in Safari/Chrome unter
 `http://10.42.0.1` öffnen oder Server, Port und Gruppe von Hand eintippen –
 beides steht auf der Seite.
+
+**Die Verbindung bricht bei der Installation ab**
+
+Das ist der Umschaltmoment vom WLAN-Client zum Access Point – unvermeidlich,
+wenn du über dasselbe WLAN-Modul verbunden bist. Der Hotspot läuft danach
+trotzdem. Neu verbinden mit dem WLAN `ArizonaArizona`, dann
+`ssh pi@10.42.0.1`. War die Installation vorher unterbrochen, holt ein erneuter
+Lauf das Fehlende nach – und weil der Hotspot schon steht, ohne ihn nochmal
+anzufassen:
+
+```bash
+sudo ./install.sh --skip-build --skip-hotspot
+```
 
 **Kein WLAN sichtbar**
 
