@@ -10,6 +10,8 @@ Macht aus einem Raspberry Pi eine autarke Audio-Basisstation:
    Gruppe **`ArizonaArizona`** – auf kürzeste Latenz getrimmt.
 4. Wer sich ins WLAN einbucht, bekommt **automatisch eine Anleitungsseite** aufs
    Display (wie im Hotel-WLAN) mit App-Links und den Verbindungsdaten.
+5. Alles Einstellbare – WLAN-Name, WLAN-Passwort, Gruppe, Latenz – lässt sich
+   im Browser unter `http://10.42.0.1/admin` ändern, ohne SSH.
 
 Alles startet von selbst, sobald der Pi Strom bekommt.
 
@@ -17,7 +19,8 @@ Alles startet von selbst, sobald der Pi Strom bekommt.
    MixPre-10T ──USB──> Raspberry Pi ──WLAN (offen)──> Handys / Laptops
                         ├── aooserver          (Gruppenserver, Port 10998)
                         ├── sonobus --headless (Sender in Gruppe "ArizonaArizona")
-                        └── Begrüßungsseite    (Anleitung auf http://10.42.0.1)
+                        ├── Begrüßungsseite    (Anleitung auf http://10.42.0.1)
+                        └── Einstellungsseite  (http://10.42.0.1/admin)
 ```
 
 ---
@@ -54,7 +57,10 @@ Das Skript erledigt der Reihe nach:
 2. Dienstbenutzer `sonobus` und Verzeichnisse anlegen
 3. Konfiguration nach `/etc/rasphotspot/rasphotspot.conf` schreiben
 4. Hilfsskripte und Begrüßungsseite nach `/usr/local` installieren
-5. `aooserver` und `sonobus` aus den Quellen bauen ← **das dauert**
+5. SonoBus aus der offiziellen Paketquelle `pkg.sonobus.net` installieren
+   (dort gibt es ARM-Pakete) und den kleinen `aooserver` selbst bauen.
+   Klappt die Paketquelle nicht, baut das Skript SonoBus aus den Quellen –
+   dann dauert es deutlich länger.
 6. systemd-Dienste einrichten und für den Autostart aktivieren
    (`aooserver`, `sonobus-sender`, `rasphotspot-portal`)
 7. Den offenen Hotspot samt Begrüßungsseite einrichten
@@ -76,25 +82,35 @@ rasphotspot-status
 
 ```bash
 sudo ./install.sh --group MeineGruppe --ssid MeinWLAN   # andere Namen
+sudo ./install.sh --build-sonobus                       # SonoBus selbst bauen
 sudo ./install.sh --skip-build                          # nur neu konfigurieren
 sudo ./install.sh --force-build                         # Binaries neu bauen
 sudo ./install.sh --skip-hotspot                        # WLAN unangetastet lassen
 sudo ./install.sh --reset-config                        # Konfiguration neu anlegen
 ```
 
-### Abkürzung: fertiges Paket statt Selbstbau
+### Woher SonoBus kommt
 
-Der SonoBus-Build ist der langsame Teil. Auf [sonobus.net/linux.html](https://sonobus.net/linux.html)
-gibt es fertige Debian-Pakete – passt eines zur Architektur des Pi
-(`dpkg --print-architecture`), spart das viel Zeit:
+Standardmäßig aus der Paketquelle von sonobus.net – das ist der offiziell
+unterstützte Weg und dauert Sekunden statt Stunden:
 
-```bash
-sudo ./install.sh --sonobus-deb https://…/sonobus_….deb   # URL oder lokale Datei
+```
+deb http://pkg.sonobus.net/apt stable main
 ```
 
-Der Installer nimmt dann das Paket, baut nur noch den kleinen `aooserver`
-selbst und findet `sonobus` anschließend über den `PATH` – egal ob es in
-`/usr/bin` (Paket) oder `/usr/local/bin` (Selbstbau) liegt.
+Der Installer trägt sie ein, holt den Signaturschlüssel und installiert
+`sonobus`. Gibt es dort kein Paket für die Architektur des Pi
+(`dpkg --print-architecture`), fällt er automatisch auf den Selbstbau zurück.
+Erzwingen lässt sich beides:
+
+```bash
+sudo ./install.sh --build-sonobus              # unbedingt selbst bauen
+sudo ./install.sh --sonobus-deb ./sonobus.deb  # bestimmtes Paket nehmen
+```
+
+`aooserver` gibt es nirgends fertig, der wird immer gebaut – er ist klein und
+in wenigen Minuten durch. Gefunden werden beide später über den `PATH`, egal ob
+sie in `/usr/bin` (Paket) oder `/usr/local/bin` (Selbstbau) liegen.
 
 ---
 
@@ -102,11 +118,12 @@ selbst und findet `sonobus` anschließend über den `PATH` – egal ob es in
 
 Ein Pi 3B reicht für den Betrieb, hat aber drei Eigenheiten:
 
-**Bauen dauert.** 1 GB RAM, und JUCE braucht beim Übersetzen einzelner Dateien
-über ein Gigabyte. Der Installer legt darum automatisch eine Auslagerungsdatei
-an (und entfernt sie hinterher wieder) und baut mit nur einem Job. Das
-funktioniert, dauert aber **mehrere Stunden** – am besten über Nacht laufen
-lassen, oder die Abkürzung über das fertige Paket nehmen.
+**Nimm das fertige Paket.** Der Selbstbau von SonoBus dauert auf einem 3B
+mehrere Stunden: 1 GB RAM, und JUCE braucht beim Übersetzen einzelner Dateien
+über ein Gigabyte. Der Installer nimmt deshalb von sich aus die Paketquelle von
+sonobus.net. Muss doch gebaut werden, legt er automatisch eine
+Auslagerungsdatei an (und entfernt sie hinterher) und baut mit einem Job –
+das läuft dann am besten über Nacht.
 
 **Nur 2,4 GHz.** Das WLAN-Modul des 3B kann kein 5 GHz (erst der 3B+ kann das).
 Die Installation merkt das selbst und schaltet auf 2,4 GHz um – in der Ausgabe
@@ -289,6 +306,54 @@ rasphotspot-status
 
 ---
 
+## Einstellungen im Browser
+
+Unter **`http://10.42.0.1/admin`** liegt eine Seite, auf der sich alles ändern
+lässt, ohne sich per SSH anzumelden:
+
+* **WLAN** – Name, Passwort (leer = offen, sonst WPA2), Funkland, Band, Kanal,
+  Adresse des Pi
+* **SonoBus-Gruppe** – Gruppenname, Gruppenpasswort, Anzeigename, Serverport
+* **Ton und Latenz** – Sendeformat, Audiopuffer, Samplerate, Jitterpuffer,
+  Eingangskanäle, Rückweg, Audiogerät
+* **Begrüßungsseite** – an/aus, Überschrift, Zusatzhinweis
+
+Angemeldet wird sich mit dem Benutzer `admin` und dem Passwort, das die
+Installation einmalig auswürfelt und am Ende anzeigt. Neu setzen:
+
+```bash
+sudo rasphotspot-admin-password           # fragt nach einem eigenen Passwort
+sudo rasphotspot-admin-password --random  # würfelt eins und zeigt es an
+```
+
+Nach dem Speichern startet der Pi genau das neu, was von der Änderung betroffen
+ist: bei Tonänderungen die SonoBus-Dienste, bei Netzwerkänderungen den Hotspot.
+**Änderst du WLAN-Name oder -Passwort, fliegst du dabei selbst aus dem Netz** –
+das ist normal, einfach neu verbinden.
+
+### Wie das abgesichert ist
+
+Der Webserver läuft als unprivilegierter Dienst und darf die Konfiguration
+**nicht** selbst schreiben. Er legt Änderungen nur als Vorschlag unter
+`/var/lib/rasphotspot/staged.json` ab. Eine systemd-Path-Unit bemerkt die Datei
+und startet `rasphotspot-apply` als root – und das prüft **jeden Wert noch
+einmal komplett neu**, bevor irgendetwas geschrieben wird.
+
+Diese doppelte Prüfung ist kein Selbstzweck: Die Konfigurationsdatei wird von
+Root-Skripten mit `source` eingelesen und von systemd als `EnvironmentFile`
+benutzt. Ein Wert mit Anführungszeichen oder `$` darin wäre damit
+Befehlsausführung als root. Deshalb kommen nur Werte durch, die einem engen
+Muster entsprechen, und nur Schlüssel aus einer festen Liste – ein per Formular
+untergeschobenes `SERVICE_USER=root` landet wortlos im Papierkorb.
+
+> Trotzdem: In einem **offenen** WLAN kann jeder in Funkreichweite die
+> Anmeldeseite erreichen, und HTTP-Basic-Auth überträgt das Passwort
+> ungeschützt. Wenn dir das zu locker ist, vergib ein WLAN-Passwort (dann ist
+> der Funkverkehr verschlüsselt) oder schalte die Seite mit
+> `ADMIN_ENABLE="no"` ganz ab.
+
+---
+
 ## Konfiguration
 
 Alle Einstellungen stehen in **`/etc/rasphotspot/rasphotspot.conf`**
@@ -304,7 +369,8 @@ Die wichtigsten Schrauben:
 
 | Schlüssel | Bedeutung | Standard |
 |---|---|---|
-| `AP_SSID` | Name des offenen WLANs | `ArizonaArizona` |
+| `AP_SSID` | Name des WLANs | `ArizonaArizona` |
+| `AP_PASSWORD` | WLAN-Passwort; leer = offenes Netz, sonst WPA2 | *(leer)* |
 | `AP_BAND` / `AP_CHANNEL` | `a` = 5 GHz (empfohlen), `bg` = 2.4 GHz | `a` / `36` |
 | `AP_COUNTRY` | Funkland – ohne das sind 5-GHz-Kanäle gesperrt | `DE` |
 | `AP_IP` | Adresse des Pi im Hotspot-Netz | `10.42.0.1` |
@@ -322,6 +388,7 @@ Die wichtigsten Schrauben:
 | `SB_JITTER_MS` / `SB_JITTER_MODE` | Start und Regelung des Jitterpuffers | `5` / `auto-full` |
 | `PORTAL_ENABLE` | Begrüßungsseite beim Einbuchen | `yes` |
 | `PORTAL_TITLE` / `PORTAL_NOTE` | Überschrift und Zusatzhinweis auf der Seite | `Live-Ton` / – |
+| `ADMIN_ENABLE` / `ADMIN_USER` | Einstellungsseite und ihr Benutzername | `yes` / `admin` |
 
 5 GHz ist für mehrere Zuhörer klar besser (mehr Bandbreite, weniger Störungen),
 2.4 GHz hat mehr Reichweite. Kann der Pi den gewünschten 5-GHz-Kanal nicht als
@@ -377,6 +444,22 @@ automatische Aufpoppen ausbleibt. Voraussetzung fürs Aufpoppen ist
 `/etc/NetworkManager/dnsmasq-shared.d/rasphotspot.conf`, sonst in
 `/etc/dnsmasq.d/rasphotspot.conf`. Manche Android-Versionen zeigen statt der
 Seite nur eine Benachrichtigung – die muss man einmal antippen.
+
+**Passwort für die Einstellungsseite vergessen**
+
+```bash
+sudo rasphotspot-admin-password --random    # neues würfeln und anzeigen
+```
+
+**Gespeicherte Änderungen werden nicht übernommen**
+
+```bash
+systemctl status rasphotspot-apply.path     # muss aktiv sein
+journalctl -u rasphotspot-apply -n 30       # was beim Übernehmen passiert ist
+```
+Die Path-Unit ist die Schleuse zwischen Webseite und System. Ist sie inaktiv,
+bleibt der Vorschlag in `/var/lib/rasphotspot/staged.json` liegen. Anwerfen mit
+`sudo systemctl enable --now rasphotspot-apply.path`.
 
 **Der Knopf „Verbindungslink kopieren" tut nichts**
 
@@ -444,6 +527,9 @@ Wer nicht warten will, nimmt das fertige Paket:
 | `/usr/local/bin/aooserver`, `/usr/local/bin/sonobus` | gebaute Programme |
 | `/usr/local/bin/rasphotspot-*` | Hilfsskripte (Status, Audio-Setup, Starter, Portal) |
 | `/usr/local/share/rasphotspot/portal.html` | die Begrüßungsseite |
+| `/usr/local/share/rasphotspot/admin.html` | die Einstellungsseite |
+| `/etc/rasphotspot/admin.secret` | Passwort-Hash der Einstellungsseite |
+| `/var/lib/rasphotspot/staged.json` | Vorschlag aus dem Formular, wird sofort abgeholt |
 | `/usr/local/src/rasphotspot/` | Quellen für spätere Neubauten |
 | `/var/cache/rasphotspot-build-swap` | Auslagerungsdatei, nur während des Builds |
 | `/var/log/rasphotspot/` | Logdateien des Verbindungsservers |
@@ -451,7 +537,9 @@ Wer nicht warten will, nimmt das fertige Paket:
 ### Die Dienste
 
 * **`aooserver.service`** – startet `aooserver --port=10998`, unabhängig vom Audio.
-* **`rasphotspot-portal.service`** – die Begrüßungsseite auf Port 80.
+* **`rasphotspot-portal.service`** – Begrüßungs- und Einstellungsseite auf Port 80.
+* **`rasphotspot-apply.path` / `.service`** – die Schleuse, die Änderungen aus
+  dem Formular als root prüft und übernimmt.
 * **`sonobus-sender.service`** – erkennt vor jedem Start das Audiointerface neu
   (`rasphotspot-audio-setup`), wartet auf Interface und Serverport und startet
   dann `sonobus --headless --group=ArizonaArizona --connectionserver=127.0.0.1:10998`.
@@ -472,21 +560,28 @@ Dienstbenutzer. Installierte apt-Pakete bleiben erhalten.
 
 ## Tests
 
-Die Hilfsfunktionen (Kartenerkennung, Kanalmasken, Verbindungslink, Erzeugen der
-Konfiguration, Format der Kommandozeilenoptionen) haben eine kleine Testsuite –
-sie braucht kein root und fasst das System nicht an:
+Die Hilfsfunktionen haben eine Testsuite – sie braucht kein root und fasst das
+System nicht an:
 
 ```bash
-./tests/run-tests.sh
+./tests/run-tests.sh        # alles: Bash-Helfer, Portal, Einstellungsseite
+python3 tests/test_config.py # nur die Prüfregeln der Konfiguration
 ```
+
+Geprüft werden unter anderem: Kartenerkennung, Kanalmasken, Verbindungslink,
+das Format der Kommandozeilenoptionen (SonoBus nimmt nur `--option=wert`), die
+Antworten der Begrüßungsseite auf die Verbindungstests von iOS/Android/Windows,
+die Anmeldung an der Einstellungsseite und – am wichtigsten – dass sich über das
+Formular keine Befehle in die Konfiguration schmuggeln lassen.
 
 ## Hinweise
 
-* SonoBus überträgt **unverschlüsselt**, und das WLAN ist **offen** – wer in
-  Funkreichweite ist, kann mithören. Für vertrauliche Inhalte ein Gruppenpasswort
+* SonoBus überträgt **unverschlüsselt**, und das WLAN ist ab Werk **offen** –
+  wer in Funkreichweite ist, kann mithören. Für vertrauliche Inhalte ein
+  WLAN-Passwort vergeben (`AP_PASSWORD` oder gleich auf der Einstellungsseite,
+  dann ist der Funkverkehr WPA2-verschlüsselt) und/oder ein Gruppenpasswort
   setzen (`SB_GROUP_PASSWORD`; die Begrüßungsseite zeigt es dann an – wer das
-  nicht will, setzt zusätzlich `PORTAL_ENABLE="no"`) und/oder das WLAN nicht
-  offen betreiben.
+  nicht will, setzt zusätzlich `PORTAL_ENABLE="no"`).
 * SonoBus (GPLv3) und aooserver stammen von Jesse Chappell / Sonosaurus, die
   AOO-Bibliothek von Christof Ressi. Dieses Projekt baut und konfiguriert diese
   Programme lediglich.

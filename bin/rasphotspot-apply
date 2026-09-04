@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+"""Übernimmt Änderungen aus der Einstellungsseite – läuft als root.
+
+Ablauf: Die (unprivilegierte) Weboberfläche legt einen Vorschlag als
+/var/lib/rasphotspot/staged.json ab. Eine systemd-Path-Unit bemerkt die Datei
+und startet dieses Skript. Es prüft **alles noch einmal selbst**, schreibt erst
+dann die Konfiguration und startet die betroffenen Teile neu.
+
+Diese Trennung ist Absicht: der Webserver bekommt dadurch keinerlei
+Root-Rechte, und was er vorschlägt, muss trotzdem durch dieselbe strenge
+Prüfung wie eine Eingabe von Hand.
+"""
+
+import json
+import os
+import subprocess
+import sys
+import time
+
+sys.path.insert(0, "/usr/local/lib/rasphotspot")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
+
+import rasphotspot_config as schema  # noqa: E402
+
+STATE_DIR = "/var/lib/rasphotspot"
+STAGED = os.path.join(STATE_DIR, "staged.json")
+RESULT = os.path.join(STATE_DIR, "apply-result.json")
+CONF = "/etc/rasphotspot/rasphotspot.conf"
+TEMPLATE = "/usr/local/share/rasphotspot/config.env.example"
+
+
+def write_result(ok, messages, errors=None):
+    payload = {
+        "ok": ok,
+        "messages": messages,
+        "errors": errors or [],
+        "finished_at": time.time(),
+    }
+    tmp = RESULT + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False)
+    os.replace(tmp, RESULT)
+    os.chmod(RESULT, 0o644)
+    for line in messages + (errors or []):
+        print(line, flush=True)
+
+
+def run(command, messages, label):
+    """Führt einen Befehl aus und hängt das Ergebnis an die Meldungen an."""
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=180)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        messages.append(f"{label}: fehlgeschlagen ({exc})")
+        return False
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip().splitlines()
+        messages.append(f"{label}: fehlgeschlagen. {detail[-1] if detail else ''}")
+        return False
+    messages.append(f"{label}: erledigt")
+    return True
+
+
+def main():
+    if not os.path.exists(STAGED):
+        return 0
+
+    try:
+        with open(STAGED, "r", encoding="utf-8") as handle:
+            staged = json.load(handle)
+        requested = staged.get("values", {})
+        if not isinstance(requested, dict):
+            raise ValueError("Feld 'values' ist kein Objekt")
+    except (OSError, ValueError) as exc:
+        os.unlink(STAGED)
+        write_result(False, [], [f"Vorschlag nicht lesbar: {exc}"])
+        return 1
+
+    os.unlink(STAGED)
+
+    current = schema.read_conf(CONF)
+    checked, errors = schema.validate(requested, current)
+
+    if errors:
+        write_result(False, [], errors)
+        return 1
+
+    changed = {k: v for k, v in checked.items() if current.get(k) != v}
+    if not changed:
+        write_result(True, ["Keine Änderungen – alles war schon so eingestellt."])
+        return 0
+
+    merged = dict(current)
+    merged.update(checked)
+
+    try:
+        content = schema.render_conf(TEMPLATE, merged)
+        tmp = CONF + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, CONF)
+    except OSError as exc:
+        write_result(False, [], [f"Konfiguration konnte nicht geschrieben werden: {exc}"])
+        return 1
+
+    messages = ["Geändert: " + ", ".join(sorted(changed))]
+    areas = schema.what_changed(current, checked)
+    ok = True
+
+    # Reihenfolge: erst Ton (schnell), dann das Netz – ein SSID-Wechsel wirft
+    # den Browser des Bedieners aus dem WLAN, das soll zuletzt passieren.
+    if "audio" in areas:
+        ok &= run(["systemctl", "restart", "aooserver.service"], messages, "Verbindungsserver neu gestartet")
+        ok &= run(["systemctl", "restart", "sonobus-sender.service"], messages, "Ton-Sender neu gestartet")
+
+    if areas & {"seite", "audio", "netzwerk"}:
+        run(["systemctl", "reload-or-restart", "rasphotspot-portal.service"],
+            messages, "Begrüßungsseite aktualisiert")
+
+    if "netzwerk" in areas:
+        messages.append("WLAN wird neu aufgesetzt – bestehende Verbindungen brechen dabei ab.")
+        ok &= run(["/usr/local/bin/rasphotspot-setup-hotspot"], messages, "WLAN neu eingerichtet")
+
+    write_result(ok, messages)
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

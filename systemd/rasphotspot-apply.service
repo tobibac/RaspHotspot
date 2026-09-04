@@ -1,0 +1,11 @@
+[Unit]
+Description=RaspHotspot: Aenderungen aus der Einstellungsseite uebernehmen
+Documentation=https://github.com/tobibac/RaspHotspot
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/rasphotspot-apply
+# Laeuft als root: schreibt die Konfiguration und startet Dienste neu.
+# Der Webserver selbst hat diese Rechte bewusst nicht - er legt nur einen
+# Vorschlag ab, der hier nochmal komplett geprueft wird.
+TimeoutStartSec=300

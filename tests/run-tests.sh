@@ -84,6 +84,14 @@ check "aooserver: --logdir="     "$(grep -c -- '"--logdir=' "$runner_aoo")" "1"
 check "aooserver: keine Langoption mit Leerzeichen" \
       "$(grep -cE '(args=\(|args\+=\()--[a-z-]+ ' "$runner_aoo")" "0"
 
+echo "Konfigurationsschema"
+if python3 "${HERE}/test_config.py" | sed 's/^/  /'; then
+    printf '  ok   Schema-Tests bestanden\n'
+else
+    printf '  FEHL Schema-Tests fehlgeschlagen\n'
+    fails=$((fails + 1))
+fi
+
 echo "Latenz-Zuordnungen"
 check "pcm16 -> Index 8"   "$(send_format_index pcm16)"  "8"
 check "pcm24 -> Index 9"   "$(send_format_index pcm24)"  "9"
@@ -117,8 +125,23 @@ PORTAL_TITLE="Live-Ton"
 PORTAL_NOTE=""
 CONF
 
+# Passwort-Hash und Ablage für die Einstellungsseite (alles im Temp-Bereich,
+# damit die Tests ohne root und ohne Spuren im System laufen).
+admin_state="$(mktemp -d)"
+admin_secret="${admin_state}/admin.secret"
+python3 - "$admin_secret" <<'PYEOF'
+import hashlib, sys
+salt = "testsalz"
+digest = hashlib.sha256((salt + "testpasswort").encode()).hexdigest()
+open(sys.argv[1], "w").write(f"sha256${salt}${digest}\n")
+PYEOF
+printf 'ADMIN_ENABLE="yes"\nADMIN_USER="admin"\n' >> "$portal_conf"
+
 RASPHOTSPOT_CONF="$portal_conf" \
 RASPHOTSPOT_PORTAL_TEMPLATE="${ROOT}/portal/portal.html" \
+RASPHOTSPOT_ADMIN_TEMPLATE="${ROOT}/portal/admin.html" \
+RASPHOTSPOT_ADMIN_SECRET="$admin_secret" \
+RASPHOTSPOT_STATE_DIR="$admin_state" \
     "${ROOT}/bin/rasphotspot-portal" >/dev/null 2>&1 &
 portal_pid=$!
 sleep 2
@@ -168,6 +191,43 @@ if kill -0 "$portal_pid" 2>/dev/null; then
           "$(status_of /irgendwas)" "200"
     check "Playstore-Link ist die echte Paket-ID" \
           "$(printf '%s' "$root_resp" | grep -c 'id=com.sonosaurus.sonobus')" "1"
+    # --- Einstellungsseite ---
+    admin_auth="admin:testpasswort"
+    check "Einstellungsseite ohne Anmeldung gesperrt" "$(status_of /admin)" "401"
+
+    fetch_auth() {  # fetch_auth <pfad> [daten]
+        python3 - "$1" "$portal_port" "${2:-}" <<'PYEOF'
+import base64, sys, urllib.request, urllib.error
+path, port, data = sys.argv[1], sys.argv[2], sys.argv[3]
+req = urllib.request.Request(f"http://127.0.0.1:{port}{path}",
+                             data=data.encode() if data else None)
+req.add_header("Authorization", "Basic " + base64.b64encode(b"admin:testpasswort").decode())
+if data:
+    req.add_header("Content-Type", "application/x-www-form-urlencoded")
+try:
+    r = urllib.request.urlopen(req, timeout=5)
+    print(f"{r.status}\t{r.read().decode('utf-8', 'replace')}")
+except urllib.error.HTTPError as e:
+    print(f"{e.code}\t{e.read().decode('utf-8', 'replace')}")
+except Exception as e:
+    print(f"000\t{e}")
+PYEOF
+    }
+
+    check "mit Anmeldung erreichbar" "$(fetch_auth /admin | head -1 | cut -f1)" "200"
+    check "Formular enthält die WLAN-Felder" \
+          "$(fetch_auth /admin | grep -c 'name="AP_SSID"')" "1"
+    check "Formular enthält die SonoBus-Felder" \
+          "$(fetch_auth /admin | grep -c 'name="SB_SEND_FORMAT"')" "1"
+    check "Einschleusen von Befehlen wird abgewiesen" \
+          "$(fetch_auth /admin 'AP_SSID=x%22%3B+reboot' | head -1 | cut -f1)" "400"
+    check "gesperrter Schlüssel landet nicht im Vorschlag" \
+          "$(fetch_auth /admin 'SERVICE_USER=root&SB_JITTER_MS=9' >/dev/null; \
+             grep -c SERVICE_USER "${admin_state}/staged.json" 2>/dev/null || true)" "0"
+    check "gültige Änderung wird abgelegt" \
+          "$(grep -c '"SB_JITTER_MS": "9"' "${admin_state}/staged.json" 2>/dev/null || true)" "1"
+    rm -f "${admin_state}/staged.json"
+
     # Beendet sich der Dienst auf SIGTERM sauber? (Regression: shutdown()
     # aus dem Signalhandler im selben Thread verklemmt sich.)
     kill -TERM "$portal_pid" 2>/dev/null
@@ -182,7 +242,7 @@ if kill -0 "$portal_pid" 2>/dev/null; then
 else
     check "Portal startet" "nein (Port ${portal_port} belegt?)" "ja"
 fi
-rm -f "$portal_conf"
+rm -rf "$portal_conf" "$admin_state"
 
 echo "Build-Parallelität"
 check "mindestens 1 Job" "$([ "$(build_jobs)" -ge 1 ] && echo ja)" "ja"

@@ -28,7 +28,11 @@ backend="unbekannt"
 [ -f "${STATE_DIR}/hotspot.state" ] && backend="$(grep -m1 '^BACKEND=' "${STATE_DIR}/hotspot.state" | cut -d= -f2)"
 log "  Backend      : ${backend}"
 log "  Interface    : ${IFACE}"
-log "  SSID         : ${AP_SSID} (offen, ohne Passwort)"
+if [ -n "${AP_PASSWORD:-}" ]; then
+    log "  SSID         : ${AP_SSID} (WPA2, mit Passwort)"
+else
+    log "  SSID         : ${AP_SSID} (offen, ohne Passwort)"
+fi
 log "  IP           : ${AP_IP}/${AP_PREFIX}"
 
 if [ "$backend" = "networkmanager" ]; then
@@ -101,6 +105,25 @@ if [ "${PORTAL_ENABLE:-yes}" = "yes" ]; then
     fi
 else
     log "  abgeschaltet (PORTAL_ENABLE=\"no\")"
+fi
+
+log ""
+log "${C_BLD}Einstellungsseite${C_RST}"
+if [ "${ADMIN_ENABLE:-yes}" = "yes" ] && [ "${PORTAL_ENABLE:-yes}" = "yes" ]; then
+    log "  Adresse      : http://${AP_IP}/admin"
+    log "  Benutzer     : ${ADMIN_USER:-admin}"
+    if [ -f /etc/rasphotspot/admin.secret ]; then
+        log "  Passwort     : gesetzt (ändern: sudo rasphotspot-admin-password)"
+    else
+        log "  Passwort     : ${C_RED}fehlt${C_RST} – setzen mit: sudo rasphotspot-admin-password"
+    fi
+    if systemctl is-active --quiet rasphotspot-apply.path 2>/dev/null; then
+        log "  Übernahme    : ${C_GRN}bereit${C_RST} (rasphotspot-apply.path)"
+    else
+        log "  Übernahme    : ${C_RED}inaktiv${C_RST} – Änderungen werden nicht übernommen"
+    fi
+else
+    log "  abgeschaltet"
 fi
 
 log ""

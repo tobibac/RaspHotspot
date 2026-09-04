@@ -1,0 +1,9 @@
+[Unit]
+Description=RaspHotspot: wartet auf Aenderungen aus der Einstellungsseite
+
+[Path]
+PathExists=/var/lib/rasphotspot/staged.json
+Unit=rasphotspot-apply.service
+
+[Install]
+WantedBy=multi-user.target

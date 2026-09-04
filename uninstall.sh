@@ -21,6 +21,9 @@ need_root
 load_config
 
 step "Dienste stoppen"
+systemctl disable --now rasphotspot-apply.path >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/rasphotspot-apply.path /etc/systemd/system/rasphotspot-apply.service
+
 for unit in sonobus-sender aooserver rasphotspot-portal; do
     systemctl disable --now "${unit}.service" >/dev/null 2>&1 || true
     rm -f "/etc/systemd/system/${unit}.service"
@@ -53,6 +56,8 @@ systemctl daemon-reload
 
 step "Dateien entfernen"
 rm -f "${PREFIX}"/bin/rasphotspot-* "${PREFIX}/bin/aooserver" "${PREFIX}/bin/sonobus"
+# Paketquelle von sonobus.net wieder entfernen (das Paket selbst bleibt).
+rm -f /etc/apt/sources.list.d/sonobus.list /etc/apt/trusted.gpg.d/sonobus.gpg
 rm -rf "${PREFIX}/lib/rasphotspot" "${PREFIX}/share/rasphotspot"
 rm -f /etc/udev/rules.d/99-rasphotspot-usb-audio.rules
 rm -f /etc/security/limits.d/95-rasphotspot-audio.conf

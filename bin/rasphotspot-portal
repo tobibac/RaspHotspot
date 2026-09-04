@@ -10,18 +10,42 @@ Gestartet von rasphotspot-portal.service, Konfiguration aus
 /etc/rasphotspot/rasphotspot.conf.
 """
 
+import base64
+import hashlib
+import hmac
 import html
+import json
 import os
 import re
+import secrets
 import signal
 import sys
 import threading
+import time
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+sys.path.insert(0, "/usr/local/lib/rasphotspot")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
+
+import rasphotspot_config as schema  # noqa: E402
 
 CONF_FILE = os.environ.get("RASPHOTSPOT_CONF", "/etc/rasphotspot/rasphotspot.conf")
 TEMPLATE_FILE = os.environ.get(
     "RASPHOTSPOT_PORTAL_TEMPLATE", "/usr/local/share/rasphotspot/portal.html"
 )
+ADMIN_TEMPLATE_FILE = os.environ.get(
+    "RASPHOTSPOT_ADMIN_TEMPLATE", "/usr/local/share/rasphotspot/admin.html"
+)
+ADMIN_SECRET_FILE = os.environ.get(
+    "RASPHOTSPOT_ADMIN_SECRET", "/etc/rasphotspot/admin.secret"
+)
+STATE_DIR = os.environ.get("RASPHOTSPOT_STATE_DIR", "/var/lib/rasphotspot")
+STAGED_FILE = os.path.join(STATE_DIR, "staged.json")
+RESULT_FILE = os.path.join(STATE_DIR, "apply-result.json")
+
+# Größenbremse: ein Formular ist ein paar Kilobyte groß, mehr nehmen wir nicht an.
+MAX_BODY = 64 * 1024
 
 # Android meldet "Internet vorhanden", sobald es hier eine 204 bekommt. Deshalb
 # antworten wir auf genau diese Pfade mit einer Weiterleitung auf die Seite –
@@ -111,6 +135,128 @@ def build_page(conf):
     return template.encode("utf-8")
 
 
+# =============================================================================
+# Einstellungsseite
+# =============================================================================
+
+def check_password(candidate):
+    """Prüft ein Passwort gegen /etc/rasphotspot/admin.secret.
+
+    Format der Datei: sha256$<salz>$<hex>. Gespeichert wird nie das Passwort
+    selbst – wer die Datei liest, kann sich damit nicht anmelden.
+    """
+    try:
+        with open(ADMIN_SECRET_FILE, "r", encoding="utf-8") as handle:
+            stored = handle.read().strip()
+    except OSError:
+        return False
+
+    parts = stored.split("$")
+    if len(parts) != 3 or parts[0] != "sha256":
+        return False
+
+    _, salt, expected = parts
+    actual = hashlib.sha256((salt + candidate).encode("utf-8")).hexdigest()
+    return hmac.compare_digest(actual, expected)
+
+
+def hash_password(password):
+    salt = secrets.token_hex(8)
+    digest = hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
+    return f"sha256${salt}${digest}"
+
+
+def render_field(field, value):
+    """Ein Formularfeld als HTML."""
+    field_id = f"f_{field.key}"
+    label = html.escape(field.label)
+    help_text = f'<span class="help">{html.escape(field.help)}</span>' if field.help else ""
+
+    if field.kind == "choice" or field.kind == "bool":
+        choices = field.choices or [("yes", "an"), ("no", "aus")]
+        options = []
+        for option_value, option_label in choices:
+            selected = " selected" if str(value) == option_value else ""
+            options.append(
+                f'<option value="{html.escape(option_value, quote=True)}"{selected}>'
+                f"{html.escape(option_label)}</option>"
+            )
+        control = (
+            f'<select id="{field_id}" name="{html.escape(field.key, quote=True)}">'
+            + "".join(options)
+            + "</select>"
+        )
+    else:
+        input_type = {"password": "password", "int": "number"}.get(field.kind, "text")
+        extra = ""
+        if field.kind == "int":
+            if field.minimum is not None:
+                extra += f' min="{field.minimum}"'
+            if field.maximum is not None:
+                extra += f' max="{field.maximum}"'
+        if field.kind == "password":
+            extra += ' autocomplete="off"'
+        control = (
+            f'<input id="{field_id}" type="{input_type}" '
+            f'name="{html.escape(field.key, quote=True)}" '
+            f'value="{html.escape(str(value), quote=True)}"{extra}>'
+        )
+
+    return (
+        f'<label class="field" for="{field_id}">'
+        f'<span class="label">{label}</span>{control}{help_text}</label>'
+    )
+
+
+def build_admin_page(conf, status_html=""):
+    """Baut die Einstellungsseite aus dem Schema und der aktuellen Konfiguration."""
+    groups_html = []
+    for group_key, group_label in schema.GROUPS:
+        fields = [f for f in schema.FIELDS if f.group == group_key]
+        if not fields:
+            continue
+        rendered = "".join(render_field(f, conf.get(f.key, "")) for f in fields)
+        groups_html.append(
+            f'<div class="card"><h2>{html.escape(group_label)}</h2>{rendered}</div>'
+        )
+
+    open_network = not conf.get("AP_PASSWORD", "")
+    hint = (
+        '<div class="note warn">Das WLAN ist offen – jeder in Funkreichweite kann '
+        "mithören und diese Seite aufrufen. Ein WLAN-Passwort unten ändert das.</div>"
+        if open_network
+        else ""
+    )
+
+    try:
+        with open(ADMIN_TEMPLATE_FILE, "r", encoding="utf-8") as handle:
+            template = handle.read()
+    except OSError as exc:
+        return f"<h1>Vorlage fehlt</h1><p>{html.escape(str(exc))}</p>".encode("utf-8")
+
+    subtitle = (
+        f"WLAN {html.escape(conf.get('AP_SSID', '?'))} · "
+        f"Gruppe {html.escape(conf.get('SB_GROUP', '?'))} · "
+        f"{html.escape(conf.get('AP_IP', '?'))}"
+    )
+
+    page = template
+    page = page.replace("@TITLE@", html.escape(conf.get("PORTAL_TITLE", "RaspHotspot")))
+    page = page.replace("@SUBTITLE@", subtitle)
+    page = page.replace("@STATUS@", hint + status_html)
+    page = page.replace("@GROUPS@", "".join(groups_html))
+    return page.encode("utf-8")
+
+
+def read_result():
+    """Ergebnis des letzten Übernehmens (oder None)."""
+    try:
+        with open(RESULT_FILE, "r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return None
+
+
 class PortalHandler(BaseHTTPRequestHandler):
     server_version = "RaspHotspot"
     sys_version = ""
@@ -129,8 +275,114 @@ class PortalHandler(BaseHTTPRequestHandler):
         if body and self.command != "HEAD":
             self.wfile.write(body)
 
+    # --- Anmeldung ---------------------------------------------------------
+    def require_admin(self):
+        """HTTP-Basic-Anmeldung. Gibt True zurück, wenn es weitergehen darf."""
+        header = self.headers.get("Authorization", "")
+        if header.startswith("Basic "):
+            try:
+                decoded = base64.b64decode(header[6:]).decode("utf-8", "replace")
+                user, _, password = decoded.partition(":")
+            except (ValueError, UnicodeDecodeError):
+                user, password = "", ""
+
+            expected_user = self.server.conf.get("ADMIN_USER", "admin")
+            if hmac.compare_digest(user, expected_user) and check_password(password):
+                return True
+
+        # Kleine Bremse gegen stures Durchprobieren.
+        time.sleep(0.5)
+        body = b"Anmeldung erforderlich.\n"
+        self._send(401, body, "text/plain; charset=utf-8",
+                   {"WWW-Authenticate": 'Basic realm="RaspHotspot", charset="UTF-8"'})
+        return False
+
+    # --- Einstellungsseite -------------------------------------------------
+    def handle_admin(self, path):
+        if self.server.conf.get("ADMIN_ENABLE", "yes") != "yes":
+            self._send(200, self.server.page)
+            return
+
+        if not self.require_admin():
+            return
+
+        # Immer frisch lesen: die Datei ändert sich beim Übernehmen.
+        try:
+            conf = schema.read_conf(CONF_FILE)
+        except OSError:
+            conf = dict(self.server.conf)
+
+        if path == "/admin/status":
+            if os.path.exists(STAGED_FILE):
+                self._send_json({"pending": True})
+                return
+            result = read_result()
+            if result is None:
+                self._send_json({"pending": False, "ok": True, "messages": [], "errors": []})
+            else:
+                result["pending"] = False
+                self._send_json(result)
+            return
+
+        if self.command == "POST":
+            self.handle_admin_save(conf)
+            return
+
+        self._send(200, build_admin_page(conf))
+
+    def handle_admin_save(self, conf):
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0 or length > MAX_BODY:
+            self._send_json({"ok": False, "errors": ["Formular ist leer oder zu groß."]}, 400)
+            return
+
+        raw = self.rfile.read(length).decode("utf-8", "replace")
+        submitted = {
+            key: values[-1]
+            for key, values in urllib.parse.parse_qs(raw, keep_blank_values=True).items()
+        }
+
+        checked, errors = schema.validate(submitted, conf)
+        if errors:
+            self._send_json({"ok": False, "errors": errors}, 400)
+            return
+
+        changed = {k: v for k, v in checked.items() if conf.get(k) != v}
+        if not changed:
+            self._send_json({"ok": True, "pending": False,
+                             "messages": ["Keine Änderungen – alles war schon so eingestellt."]})
+            return
+
+        # Der Webserver hat selbst keine Rechte, die Konfiguration zu schreiben.
+        # Er legt den Vorschlag nur ab; rasphotspot-apply prüft ihn als root
+        # noch einmal und übernimmt ihn dann.
+        try:
+            if os.path.exists(RESULT_FILE):
+                os.unlink(RESULT_FILE)
+            tmp = STAGED_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as handle:
+                json.dump({"values": checked, "requested_at": time.time()},
+                          handle, ensure_ascii=False)
+            os.replace(tmp, STAGED_FILE)
+        except OSError as exc:
+            self._send_json({"ok": False,
+                             "errors": [f"Vorschlag konnte nicht abgelegt werden: {exc}"]}, 500)
+            return
+
+        print(f"Einstellungen geändert: {', '.join(sorted(changed))}", flush=True)
+        self._send_json({"ok": True, "pending": True,
+                         "messages": ["Wird übernommen …"]})
+
+    def _send_json(self, payload, code=200):
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self._send(code, body, "application/json; charset=utf-8")
+
     def _handle(self):
-        path = self.path.split("?", 1)[0]
+        path = self.path.split("?", 1)[0].rstrip("/") or "/"
+
+        if path == "/admin" or path.startswith("/admin/"):
+            self.handle_admin(path)
+            return
 
         if path == "/health":
             self._send(200, b"ok\n", "text/plain; charset=utf-8")
@@ -174,11 +426,13 @@ def main():
     server.daemon_threads = True
     server.page = build_page(conf)
     server.portal_host = host_ip
+    server.conf = conf
 
     def reload_page(signum, frame):
         conf_new = read_config(CONF_FILE)
         server.page = build_page(conf_new)
         server.portal_host = conf_new.get("AP_IP", host_ip)
+        server.conf = conf_new
         print("Seite neu erzeugt (SIGHUP).", flush=True)
 
     def stop(signum, frame):
@@ -196,6 +450,9 @@ def main():
         f"(Gruppe {conf.get('SB_GROUP', '?')}, Server {host_ip})",
         flush=True,
     )
+    if conf.get("ADMIN_ENABLE", "yes") == "yes":
+        print(f"Einstellungen unter http://{host_ip}/admin "
+              f"(Benutzer: {conf.get('ADMIN_USER', 'admin')})", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

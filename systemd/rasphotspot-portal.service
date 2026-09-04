@@ -21,6 +21,9 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
+# Nur dieses eine Verzeichnis ist beschreibbar: dort legt die Einstellungsseite
+# ihren Vorschlag ab, den rasphotspot-apply anschliessend als root prueft.
+ReadWritePaths=/var/lib/rasphotspot
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes

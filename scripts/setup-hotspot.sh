@@ -49,7 +49,11 @@ if [ "$BAND" = "a" ] && command -v iw >/dev/null 2>&1; then
         CHANNEL="${AP_FALLBACK_CHANNEL}"
     fi
 fi
-info "Band: ${BAND} (Kanal ${CHANNEL}), SSID '${AP_SSID}' – offen, ohne Passwort"
+if [ -n "${AP_PASSWORD:-}" ]; then
+    info "Band: ${BAND} (Kanal ${CHANNEL}), SSID '${AP_SSID}' – mit WPA2-Passwort"
+else
+    info "Band: ${BAND} (Kanal ${CHANNEL}), SSID '${AP_SSID}' – offen, ohne Passwort"
+fi
 
 # Das Begrüßungsfenster funktioniert nur, wenn die Geräte den Pi als Gateway
 # und DNS bekommen – sonst fragen sie ihn gar nicht erst.
@@ -104,9 +108,18 @@ setup_networkmanager() {
         connection.autoconnect yes \
         connection.autoconnect-priority 100 >/dev/null
 
-    # Sicherstellen, dass keine Verschlüsselung konfiguriert ist (offenes Netz).
-    nmcli connection modify "${AP_CON_NAME}" \
-        remove 802-11-wireless-security >/dev/null 2>&1 || true
+    if [ -n "${AP_PASSWORD:-}" ]; then
+        nmcli connection modify "${AP_CON_NAME}" \
+            802-11-wireless-security.key-mgmt wpa-psk \
+            802-11-wireless-security.proto rsn \
+            802-11-wireless-security.pairwise ccmp \
+            802-11-wireless-security.group ccmp \
+            802-11-wireless-security.psk "${AP_PASSWORD}" >/dev/null
+    else
+        # Offenes Netz: alle Sicherheitseinstellungen wieder loswerden.
+        nmcli connection modify "${AP_CON_NAME}" \
+            remove 802-11-wireless-security >/dev/null 2>&1 || true
+    fi
 
     nmcli connection up "${AP_CON_NAME}" >/dev/null
     echo "BACKEND=networkmanager" > "${STATE_DIR}/hotspot.state"
@@ -136,6 +149,18 @@ setup_hostapd() {
     [ -f /etc/hostapd/hostapd.conf ] && [ ! -f /etc/hostapd/hostapd.conf.vor-rasphotspot ] && \
         cp -a /etc/hostapd/hostapd.conf /etc/hostapd/hostapd.conf.vor-rasphotspot
 
+    local security
+    if [ -n "${AP_PASSWORD:-}" ]; then
+        security="# WPA2 (PSK)
+wpa=2
+wpa_passphrase=${AP_PASSWORD}
+wpa_key_mgmt=WPA-PSK
+rsn_pairwise=CCMP"
+    else
+        security="# Offenes Netz: keine Authentifizierung, keine Verschlüsselung
+wpa=0"
+    fi
+
     cat > /etc/hostapd/hostapd.conf <<CONF
 # Automatisch erzeugt von RaspHotspot
 interface=${IFACE}
@@ -150,9 +175,8 @@ ieee80211n=1
 ${extra}
 wmm_enabled=1
 
-# Offenes Netz: keine Authentifizierung, keine Verschlüsselung
 auth_algs=1
-wpa=0
+${security}
 macaddr_acl=0
 ignore_broadcast_ssid=0
 CONF

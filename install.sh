@@ -17,6 +17,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${HERE}/lib/common.sh"
 
 SONOBUS_DEB=""
+SONOBUS_SOURCE="repo"     # repo = fertiges Paket bevorzugen, build = selbst bauen
 SKIP_BUILD="no"
 SKIP_HOTSPOT="no"
 FORCE_BUILD="no"
@@ -36,9 +37,9 @@ Optionen:
   --ssid NAME        Name des offenen WLANs (Standard: ArizonaArizona)
   --config DATEI     zusätzliche Konfigurationsdatei einlesen
   --reset-config     vorhandene /etc/rasphotspot/rasphotspot.conf überschreiben
-  --sonobus-deb Q    fertiges SonoBus-Paket statt Selbstbau (Datei oder URL).
-                     Spart auf langsamen Pis Stunden – Pakete gibt es auf
-                     sonobus.net/linux.html
+  --sonobus-deb Q    bestimmtes SonoBus-Paket verwenden (Datei oder URL)
+  --build-sonobus    SonoBus aus den Quellen bauen statt das fertige Paket
+                     von pkg.sonobus.net zu nehmen (dauert Stunden)
   --skip-build       aooserver/SonoBus nicht neu bauen (nutzt vorhandene Binaries)
   --force-build      auch dann bauen, wenn die Binaries schon existieren
   --skip-hotspot     WLAN-Hotspot nicht anfassen
@@ -57,6 +58,7 @@ while [ $# -gt 0 ]; do
         --config)       EXTRA_CONFIG="${2:-}"; shift 2 ;;
         --reset-config) KEEP_CONFIG="no"; shift ;;
         --sonobus-deb)  SONOBUS_DEB="${2:-}"; shift 2 ;;
+        --build-sonobus) SONOBUS_SOURCE="build"; shift ;;
         --skip-build)   SKIP_BUILD="yes"; shift ;;
         --force-build)  FORCE_BUILD="yes"; shift ;;
         --skip-hotspot) SKIP_HOTSPOT="yes"; shift ;;
@@ -95,6 +97,7 @@ REQUIRED_PKGS=(
     libx11-dev libxext-dev libxinerama-dev libxrandr-dev libxcursor-dev
     libgl-dev
     alsa-utils iw rfkill
+    curl ca-certificates
 )
 OPTIONAL_PKGS=(opus-tools xvfb)
 
@@ -162,6 +165,14 @@ if [ -d /etc/security/limits.d ]; then
 @audio   -  memlock    unlimited
 LIM
 fi
+# Passwort für die Einstellungsseite – nur beim ersten Mal erzeugen.
+ADMIN_PASSWORD_NEW=""
+if [ "${ADMIN_ENABLE:-yes}" = "yes" ] && [ ! -f "${CONF_DIR}/admin.secret" ]; then
+    ADMIN_PASSWORD_NEW="$(RASPHOTSPOT_SERVICE_USER="${SERVICE_USER}" \
+        "${HERE}/bin/rasphotspot-admin-password" --random | sed 's/.*: //')"
+    ok "Passwort für die Einstellungsseite erzeugt"
+fi
+
 ok "Verzeichnisse angelegt"
 
 # =============================================================================
@@ -177,29 +188,79 @@ step "4/8  Skripte installieren"
 # =============================================================================
 install -d -m 755 "${PREFIX}/lib/rasphotspot"
 install -m 644 "${HERE}/lib/common.sh" "${PREFIX}/lib/rasphotspot/common.sh"
+install -m 644 "${HERE}/lib/rasphotspot_config.py" "${PREFIX}/lib/rasphotspot/rasphotspot_config.py"
 for f in "${HERE}"/bin/*; do
     install -m 755 "$f" "${PREFIX}/bin/$(basename "$f")"
 done
 install -d -m 755 "${PREFIX}/share/rasphotspot"
 install -m 644 "${HERE}/portal/portal.html" "${PREFIX}/share/rasphotspot/portal.html"
+install -m 644 "${HERE}/portal/admin.html" "${PREFIX}/share/rasphotspot/admin.html"
+# Vorlage für die Konfiguration – rasphotspot-apply schreibt damit die Datei
+# neu und behält dabei alle Kommentare.
+install -m 644 "${HERE}/config.env.example" "${PREFIX}/share/rasphotspot/config.env.example"
+# Damit die Einstellungsseite das WLAN neu aufsetzen kann.
+install -m 755 "${HERE}/scripts/setup-hotspot.sh" "${PREFIX}/bin/rasphotspot-setup-hotspot"
 install -m 644 "${HERE}/udev/99-rasphotspot-usb-audio.rules" \
         /etc/udev/rules.d/99-rasphotspot-usb-audio.rules
 udevadm control --reload-rules >/dev/null 2>&1 || true
 ok "Skripte nach ${PREFIX}/bin installiert"
 
 # =============================================================================
-step "5/8  aooserver und SonoBus bauen"
+step "5/8  aooserver und SonoBus installieren"
 # =============================================================================
+# SonoBus aus der offiziellen Paketquelle von sonobus.net installieren.
+# Das ist der schnelle Weg – gerade auf kleinen Pis, wo der Selbstbau Stunden
+# dauert. Es gibt dort ARM-Pakete in 32 und 64 Bit.
+sonobus_from_apt_repo() {
+    local key="/etc/apt/trusted.gpg.d/sonobus.gpg"
+    local list="/etc/apt/sources.list.d/sonobus.list"
+
+    info "Richte die SonoBus-Paketquelle ein (pkg.sonobus.net)"
+    echo "deb http://pkg.sonobus.net/apt stable main" > "$list"
+
+    if ! curl -fsSL -o "${key}.tmp" "https://pkg.sonobus.net/apt/keyring.gpg"; then
+        rm -f "${key}.tmp" "$list"
+        warn "Schlüssel der Paketquelle nicht erreichbar."
+        return 1
+    fi
+    mv "${key}.tmp" "$key"
+    chmod 644 "$key"
+
+    if ! DEBIAN_FRONTEND=noninteractive apt-get update -qq; then
+        warn "apt-get update mit der neuen Paketquelle fehlgeschlagen."
+        rm -f "$list" "$key"
+        return 1
+    fi
+
+    if ! DEBIAN_FRONTEND=noninteractive apt-get install -y sonobus; then
+        warn "Für diese Architektur ($(dpkg --print-architecture)) gibt es dort kein Paket."
+        return 1
+    fi
+
+    command -v sonobus >/dev/null 2>&1
+}
+
+# Taugt das installierte SonoBus für den Betrieb ohne Bildschirm?
+sonobus_has_headless() {
+    local bin
+    bin="$(command -v sonobus 2>/dev/null || echo "${PREFIX}/bin/sonobus")"
+    [ -x "$bin" ] || return 1
+    timeout 30 "$bin" --help 2>&1 | grep -q -- "--headless"
+}
+
 if [ "$SKIP_BUILD" = "yes" ]; then
-    warn "Build übersprungen (--skip-build)"
+    warn "Installation von aooserver/SonoBus übersprungen (--skip-build)"
     command -v aooserver >/dev/null 2>&1 || die "aooserver fehlt – ohne --skip-build installieren."
     command -v sonobus   >/dev/null 2>&1 || die "sonobus fehlt – ohne --skip-build installieren."
 else
+    # aooserver gibt es nirgends fertig – der muss gebaut werden. Er ist aber
+    # klein und in ein paar Minuten durch.
     if [ -x "${PREFIX}/bin/aooserver" ] && [ "$FORCE_BUILD" = "no" ]; then
         ok "aooserver ist bereits installiert (--force-build erzwingt Neubau)"
     else
         "${HERE}/scripts/build-aooserver.sh"
     fi
+
     if [ -n "$SONOBUS_DEB" ]; then
         info "Installiere SonoBus aus dem Paket ${SONOBUS_DEB}"
         deb_file="$SONOBUS_DEB"
@@ -214,25 +275,34 @@ else
         command -v sonobus >/dev/null 2>&1 \
             || die "Nach der Paketinstallation ist kein 'sonobus' im PATH."
         ok "SonoBus aus Paket installiert: $(command -v sonobus)"
-    elif [ -x "${PREFIX}/bin/sonobus" ] && [ "$FORCE_BUILD" = "no" ]; then
-        ok "sonobus ist bereits installiert (--force-build erzwingt Neubau)"
+
     elif command -v sonobus >/dev/null 2>&1 && [ "$FORCE_BUILD" = "no" ]; then
-        ok "sonobus ist bereits vorhanden ($(command -v sonobus))"
+        ok "SonoBus ist bereits vorhanden ($(command -v sonobus))"
+
+    elif [ "$SONOBUS_SOURCE" = "build" ]; then
+        info "SonoBus wird aus den Quellen gebaut (--build-sonobus)."
+        "${HERE}/scripts/build-sonobus.sh"
+
+    elif sonobus_from_apt_repo; then
+        ok "SonoBus aus der Paketquelle installiert ($(command -v sonobus))"
+        if ! sonobus_has_headless; then
+            warn "Das Paket kennt keinen --headless-Modus – baue doch aus den Quellen."
+            "${HERE}/scripts/build-sonobus.sh"
+        fi
+
     else
-        info "Jetzt wird SonoBus gebaut. Das dauert – Zeit für einen Kaffee."
-        info "Reicht der Arbeitsspeicher nicht, wird für den Build automatisch"
-        info "eine Auslagerungsdatei angelegt und hinterher wieder entfernt."
+        warn "Paketquelle nicht nutzbar – SonoBus wird aus den Quellen gebaut."
+        info "Das dauert; reicht der Arbeitsspeicher nicht, legt der Build"
+        info "automatisch eine Auslagerungsdatei an und entfernt sie hinterher."
         "${HERE}/scripts/build-sonobus.sh"
     fi
 fi
 
-# Kennt das gebaute SonoBus den Headless-Modus? (rein informativ)
-sb_help="$(timeout 30 "$(command -v sonobus || echo "${PREFIX}/bin/sonobus")" --help 2>&1 || true)"
-if ! printf '%s' "$sb_help" | grep -q -- "--headless"; then
-    warn "Konnte den Headless-Modus nicht bestaetigen (sonobus --help ohne Ergebnis)."
-    warn "Falls sonobus-sender nicht startet: SB_USE_XVFB=\"yes\" in ${CONF_FILE} setzen."
+if sonobus_has_headless; then
+    ok "SonoBus läuft ohne Bildschirm (--headless vorhanden)"
 else
-    ok "SonoBus mit Headless-Modus gebaut"
+    warn "Konnte den Headless-Modus nicht bestätigen."
+    warn "Falls sonobus-sender nicht startet: SB_USE_XVFB=\"yes\" in ${CONF_FILE} setzen."
 fi
 
 # =============================================================================
@@ -241,7 +311,18 @@ step "6/8  systemd-Dienste einrichten"
 UNITS=(aooserver sonobus-sender)
 [ "${PORTAL_ENABLE:-yes}" = "yes" ] && UNITS+=(rasphotspot-portal)
 
+# Die Übernahme-Schleuse: eine Path-Unit bemerkt den Vorschlag der
+# Einstellungsseite und startet den Dienst, der ihn als root prüft.
+if [ "${ADMIN_ENABLE:-yes}" = "yes" ] && [ "${PORTAL_ENABLE:-yes}" = "yes" ]; then
+    UNITS+=(rasphotspot-apply.path)
+    install -m 644 "${HERE}/systemd/rasphotspot-apply.service" \
+            /etc/systemd/system/rasphotspot-apply.service
+    install -m 644 "${HERE}/systemd/rasphotspot-apply.path" \
+            /etc/systemd/system/rasphotspot-apply.path
+fi
+
 for unit in "${UNITS[@]}"; do
+    case "$unit" in *.path) continue ;; esac
     sed -e "s|@SERVICE_USER@|${SERVICE_USER}|g" \
         -e "s|@SERVICE_HOME@|${SERVICE_HOME}|g" \
         -e "s|@LOG_DIR@|${SB_SERVER_LOGDIR:-/var/log/rasphotspot}|g" \
@@ -250,8 +331,12 @@ for unit in "${UNITS[@]}"; do
 done
 systemctl daemon-reload
 for unit in "${UNITS[@]}"; do
-    systemctl enable "${unit}.service" >/dev/null
-    ok "${unit}.service eingerichtet und für den Autostart aktiviert"
+    case "$unit" in
+        *.path) systemctl enable "${unit}" >/dev/null; systemctl restart "${unit}" >/dev/null
+                ok "${unit} eingerichtet (Schleuse für die Einstellungsseite)" ;;
+        *)      systemctl enable "${unit}.service" >/dev/null
+                ok "${unit}.service eingerichtet und für den Autostart aktiviert" ;;
+    esac
 done
 
 if [ "${PORTAL_ENABLE:-yes}" != "yes" ]; then
@@ -296,7 +381,7 @@ cat > "${CONF_DIR}/connect-info.txt" <<INFO
 SonoBus-Gruppe "${SB_GROUP}" auf diesem Raspberry Pi
 =====================================================
 
-1. Mit dem offenen WLAN "${AP_SSID}" verbinden (kein Passwort).
+1. Mit dem WLAN "${AP_SSID}" verbinden${AP_PASSWORD:+ (Passwort: ${AP_PASSWORD})}${AP_PASSWORD:-  – es ist offen, kein Passwort nötig}.
    Auf den meisten Geräten öffnet sich die Anleitungsseite dann von selbst.
    Sonst im Browser aufrufen: http://${AP_IP}/
 
@@ -322,12 +407,23 @@ INFO
 log ""
 log "${C_GRN}${C_BLD}Fertig.${C_RST}"
 log ""
+if [ -n "${AP_PASSWORD:-}" ]; then
+log "  WLAN            : ${C_BLD}${AP_SSID}${C_RST} (WPA2, Passwort gesetzt)"
+else
 log "  WLAN            : ${C_BLD}${AP_SSID}${C_RST} (offen, ohne Passwort)"
+fi
 log "  Verbindungsserver: ${C_BLD}${AP_IP}:${SB_SERVER_PORT}${C_RST}"
 log "  Gruppe          : ${C_BLD}${SB_GROUP}${C_RST}"
 log "  Link            : ${LINK}"
 log ""
 log "  Begrüßungsseite : http://${AP_IP}/ (öffnet sich beim Einbuchen von selbst)"
+if [ "${ADMIN_ENABLE:-yes}" = "yes" ]; then
+log "  Einstellungen   : ${C_BLD}http://${AP_IP}/admin${C_RST} (Benutzer ${ADMIN_USER:-admin})"
+if [ -n "$ADMIN_PASSWORD_NEW" ]; then
+log "  Passwort dafür  : ${C_BLD}${ADMIN_PASSWORD_NEW}${C_RST}  ${C_YEL}(jetzt notieren!)${C_RST}"
+log "                    ändern mit: sudo rasphotspot-admin-password"
+fi
+fi
 log "  Latenz          : ${SB_SEND_FORMAT}, Puffer ${SB_BUFFER_SIZE} Samples, Jitterpuffer ${SB_JITTER_MS} ms"
 log ""
 log "  Zustand prüfen  : rasphotspot-status"
